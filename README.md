@@ -180,11 +180,11 @@ fortigate_policy_to_excel/
 
 ## ❓ Frequently Asked Questions (FAQ & Troubleshooting)
 
-### Q1. Running `실행하기.bat` outputs "Python 실행 경로를 찾을 수 없습니다" (Cannot find Python path).
+### Q1. "Python execution path not found" (Cannot find Python path).
 * **Cause**: Python is not installed, or the "Add Python to PATH" option was not checked during installation.
 * **Solution**: Re-run the Python installer from [python.org](https://www.python.org/), choose **`Modify`**, check the **`Add Python to PATH`** checkbox, and finish installation.
 
-### Q2. "openpyxl 필요: pip install openpyxl" error appears.
+### Q2. "openpyxl required: pip install openpyxl" error appears.
 * **Cause**: The Excel manipulation library `openpyxl` is missing.
 * **Solution**: Open Command Prompt (CMD) or PowerShell and run `pip install openpyxl`.
 
