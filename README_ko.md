@@ -181,7 +181,7 @@ fortigate_policy_to_excel/
 
 ## ❓ 자주 묻는 질문 (FAQ & Troubleshooting)
 
-### Q1. `실행하기.bat`을 실행했는데 "Python 실행 경로를 찾을 수 없습니다"라고 뜹니다.
+### Q1. "Python 실행 경로를 찾을 수 없습니다"라고 뜹니다.
 * **원인**: Python이 PC에 설치되어 있지 않거나, 설치 시 "Add Python to PATH"가 누락된 경우입니다.
 * **해결법**: Python 공식 홈페이지에서 Python 설치 프로그램을 다시 실행한 후 **`Modify`** 를 선택하고 **`Add Python to PATH`** 옵션을 체크하여 설치를 완료해 주세요.
 
