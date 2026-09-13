@@ -89,7 +89,7 @@ pip install openpyxl
 1. 프로그램 폴더 내의 **`start.bat`** 파일을 더블 클릭합니다.
 2. GUI 창이 열립니다.
 3. **[Select File...]** 버튼을 눌러 변환할 포티게이트 `.conf` 파일을 선택합니다.
-4. **[Start Exporting to Excel]** 버튼을 클릭합니다.
+4. **[Start Export to Excel]** 버튼을 클릭합니다.
 5. 내보내기가 완료되면 결과 저장 폴더가 자동으로 열립니다.
 
 ### 방법 2. 파이썬 직접 실행 (GUI 모드)
