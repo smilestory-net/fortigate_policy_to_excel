@@ -33,6 +33,8 @@ import threading
 import subprocess
 import ctypes
 import webbrowser
+import base64
+import tempfile
 from collections import OrderedDict
 from datetime import datetime
 
@@ -1676,8 +1678,9 @@ C_INPUT_BG = "#3c3c3c"        # 입력창 배경색 / Input Field Background
 C_INPUT_FG = "#cccccc"        # 입력창 글자색 / Input Field Text Color
 C_TEXT_MAIN = "#d4d4d4"       # 기본 텍스트 (밝은 회색) / Main Foreground Text
 C_TEXT_MUTED = "#858585"      # 보조 텍스트 (중간 회색) / Muted Secondary Text
-C_ACCENT_BLUE = "#007acc"     # 액센트 블루 / Accent Blue
-C_BTN_PRIMARY = "#0e639c"     # 기본 버튼 (블루) / Primary Button
+C_ACCENT_BLUE = "#007acc"         # 액센트 블루 / Accent Blue
+C_ACCENT_BLUE_HOVER = "#1f8ad2"   # 액센트 블루 호버 / Accent Blue Hover
+C_BTN_PRIMARY = "#0e639c"         # 기본 버튼 (블루) / Primary Button
 C_BTN_PRIMARY_HOVER = "#1177bb"
 C_BTN_SECONDARY = "#3a3d41"   # 보조 버튼 (다크 그레이) / Secondary Button
 C_BTN_SECONDARY_HOVER = "#45494e"
@@ -1692,19 +1695,772 @@ C_STATUSBAR_BG = "#007acc"    # 하단 상태표시줄 배경색 / Status Bar Ba
 C_STATUSBAR_FG = "#ffffff"    # 하단 상태표시줄 글자색 / Status Bar Text Color
 
 
+# ==============================================================================
+# 커스텀 둥근 위젯 (타원형 버튼 및 일체형 입력창) / Custom Rounded Widgets
+# ==============================================================================
+class RoundedButton(tk.Canvas):
+    """
+    모던 타원형(캡슐형) 버튼 위젯 / Modern Oval / Capsule (Pill) Button Widget
+    부드러운 곡면 타원형 디자인과 호버, 클릭 피드백을 지원합니다.
+    Provides smooth oval capsule aesthetics with responsive hover and click animations.
+    """
+    def __init__(self, parent, text, bg, hover_bg, cmd=None, fg='#ffffff', font=('Segoe UI', 10),
+                 height=34, width=None, radius=None, border_color=None, border_width=1,
+                 disabled_bg=C_BTN_DISABLED, disabled_fg=C_BTN_DISABLED_FG, icon_type=None):
+        self._target_h = height
+        self._font = font
+        self._text = text
+        self._cmd = cmd
+        self._bg = bg
+        self._orig_bg = bg
+        self._hover_bg = hover_bg
+        self._disabled_bg = disabled_bg
+        self._disabled_fg = disabled_fg
+        self._normal_fg = fg
+        self._border_color = border_color
+        self._border_width = border_width if border_color else 0
+        self._radius = radius if radius is not None else height // 2
+        self._state = 'normal'
+        self._is_hovered = False
+        self._is_pressed = False
+        self._icon_type = icon_type
+
+        if width is None:
+            dummy = tk.Label(parent, text=text, font=font)
+            text_w = dummy.winfo_reqwidth()
+            dummy.destroy()
+            extra_icon = 28 if icon_type else 0
+            self._target_w = text_w + height + 16 + extra_icon
+        else:
+            self._target_w = width
+
+        parent_bg = parent.cget('bg')
+        super().__init__(
+            parent, width=self._target_w, height=self._target_h,
+            bg=parent_bg, bd=0, highlightthickness=0, relief=tk.FLAT
+        )
+
+        self.bind('<Configure>', self._on_resize)
+        self.bind('<Enter>', self._on_enter)
+        self.bind('<Leave>', self._on_leave)
+        self.bind('<Button-1>', self._on_press)
+        self.bind('<ButtonRelease-1>', self._on_release)
+
+    def _draw_capsule(self, x1, y1, x2, y2, r, fill, outline=''):
+        w = x2 - x1
+        h = y2 - y1
+        r = min(r, h // 2, w // 2)
+        if r <= 0:
+            self.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, tags='shape')
+            return
+        self.create_oval(x1, y1, x1 + 2 * r, y2, fill=fill, outline=outline, tags='shape')
+        self.create_oval(x2 - 2 * r, y1, x2, y2, fill=fill, outline=outline, tags='shape')
+        self.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline=outline, tags='shape')
+
+    def _redraw(self):
+        self.delete('all')
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w <= 1 or h <= 1:
+            w = self._target_w
+            h = self._target_h
+
+        if self._state == 'disabled':
+            fill_color = self._disabled_bg
+            text_color = self._disabled_fg
+            border_col = None
+            self.config(cursor='arrow')
+        else:
+            fill_color = self._hover_bg if self._is_hovered else self._bg
+            text_color = self._normal_fg
+            border_col = self._border_color
+            self.config(cursor='hand2')
+
+        r = min(h // 2, self._radius)
+
+        if border_col and self._border_width > 0:
+            self._draw_capsule(0, 0, w, h, r, border_col, '')
+            bw = self._border_width
+            self._draw_capsule(bw, bw, w - bw, h - bw, max(1, r - bw), fill_color, '')
+        else:
+            self._draw_capsule(0, 0, w, h, r, fill_color, '')
+
+        offset_y = 1 if (self._is_pressed and self._state != 'disabled') else 0
+
+        if self._icon_type == 'xlsx':
+            # 문서 (.xlsx) 벡터 아이콘 렌더링 / Draw Vector XLSX Document Icon
+            dummy = tk.Label(self, text=self._text, font=self._font)
+            tw = dummy.winfo_reqwidth()
+            dummy.destroy()
+
+            icon_w = 20
+            gap = 10
+            total_content_w = icon_w + gap + tw
+            start_x = (w - total_content_w) // 2
+
+            ix = start_x + icon_w // 2
+            iy = (h // 2) + offset_y
+
+            # 1. 문서 종이 시트 (상단 우측 모서리 접힘) / Document sheet with folded corner
+            pw = 14
+            ph = 18
+            px1 = ix - pw // 2
+            py1 = iy - ph // 2
+            px2 = px1 + pw
+            py2 = py1 + ph
+            fold = 4
+
+            if self._state == 'disabled':
+                sheet_color = '#606064'
+                fold_color = '#4a4a4e'
+                line_color = '#454548'
+                badge_color = '#3e4e42'
+                x_color = '#888888'
+            else:
+                sheet_color = '#ffffff'
+                fold_color = '#b8d6fc'
+                line_color = '#b0c4de'
+                badge_color = '#107c41'  # Office Excel Green
+                x_color = '#ffffff'
+
+            pts = [
+                px1, py1,
+                px2 - fold, py1,
+                px2, py1 + fold,
+                px2, py2,
+                px1, py2
+            ]
+            self.create_polygon(pts, fill=sheet_color, outline='', tags='icon')
+            self.create_polygon(px2 - fold, py1, px2 - fold, py1 + fold, px2, py1 + fold, fill=fold_color, outline='', tags='icon')
+
+            # 스프레드시트 눈금선 / Spreadsheet grid lines
+            for ly in [py1 + 6, py1 + 10, py1 + 14]:
+                self.create_line(px1 + 3, ly, px2 - 3, ly, fill=line_color, width=1, tags='icon')
+
+            # 2. 엑셀 녹색 'X' 뱃지 / Green Excel 'X' Badge
+            gw, gh = 11, 11
+            gx = px1 - 3
+            gy = iy - 2
+            self.create_rectangle(gx, gy, gx + gw, gy + gh, fill=badge_color, outline='', tags='icon')
+            self.create_text(gx + gw // 2 + 1, gy + gh // 2, text='X', fill=x_color, font=('Segoe UI', 7, 'bold'), tags='icon')
+
+            # 3. 텍스트 레이블 / Text Label
+            text_x = start_x + icon_w + gap + tw // 2
+            self.create_text(text_x, iy, text=self._text, fill=text_color, font=self._font, tags='label')
+        else:
+            cy = (h // 2) + offset_y
+            self.create_text(w // 2, cy, text=self._text, fill=text_color, font=self._font, tags='label')
+
+    def _on_resize(self, event):
+        self._redraw()
+
+    def _on_enter(self, event):
+        if self._state != 'disabled':
+            self._is_hovered = True
+            self._redraw()
+
+    def _on_leave(self, event):
+        self._is_hovered = False
+        self._is_pressed = False
+        self._redraw()
+
+    def _on_press(self, event):
+        if self._state != 'disabled':
+            self._is_pressed = True
+
+    def _on_release(self, event):
+        if self._state != 'disabled' and self._is_pressed:
+            self._is_pressed = False
+            if 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
+                if self._cmd:
+                    self._cmd()
+            self._redraw()
+
+    def set_state(self, state):
+        self._state = state
+        self._redraw()
+
+    def set_text(self, text):
+        self._text = text
+        self._redraw()
+
+    def config(self, **kwargs):
+        if 'state' in kwargs:
+            st = kwargs.pop('state')
+            self._state = 'disabled' if str(st) == str(tk.DISABLED) else 'normal'
+            self._redraw()
+        if 'text' in kwargs:
+            self._text = kwargs.pop('text')
+            self._redraw()
+        if kwargs:
+            super().config(**kwargs)
+
+
+class RoundedEntry(tk.Frame):
+    """
+    모던 둥근 모서리(타원형) 텍스트 입력창 위젯 / Modern Rounded Capsule Text Entry Widget
+    버튼과 동일한 높이(일체감) 및 둥근 타원형 테두리를 제공합니다.
+    Maintains identical height and rounded capsule style with adjacent buttons for visual harmony.
+    """
+    def __init__(self, parent, font=('Consolas', 10), bg=C_INPUT_BG, fg=C_INPUT_FG,
+                 border_color=C_BORDER_LIGHT, focus_border=C_ACCENT_BLUE, height=34, radius=None):
+        parent_bg = parent.cget('bg')
+        super().__init__(parent, bg=parent_bg, height=height)
+        self.pack_propagate(False)
+        self.grid_propagate(False)
+
+        self._target_h = height
+        self._radius = radius if radius is not None else height // 2
+        self._bg = bg
+        self._border_color = border_color
+        self._focus_border = focus_border
+        self._is_focused = False
+
+        self.canvas = tk.Canvas(self, bg=parent_bg, bd=0, highlightthickness=0, relief=tk.FLAT, height=height)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        self.entry = tk.Entry(
+            self.canvas, font=font, bg=bg, fg=fg, insertbackground='#ffffff',
+            bd=0, relief=tk.FLAT, highlightthickness=0
+        )
+        self.win_id = self.canvas.create_window(0, 0, window=self.entry, anchor='w')
+
+        self.entry.bind('<FocusIn>', self._on_focus_in)
+        self.entry.bind('<FocusOut>', self._on_focus_out)
+        self.canvas.bind('<Configure>', self._on_resize)
+        self.canvas.bind('<Button-1>', lambda e: self.entry.focus_set())
+
+    def _draw_capsule(self, x1, y1, x2, y2, r, fill, outline=''):
+        w = x2 - x1
+        h = y2 - y1
+        r = min(r, h // 2, w // 2)
+        if r <= 0:
+            self.canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, tags='bg_shape')
+            return
+        self.canvas.create_oval(x1, y1, x1 + 2 * r, y2, fill=fill, outline=outline, tags='bg_shape')
+        self.canvas.create_oval(x2 - 2 * r, y1, x2, y2, fill=fill, outline=outline, tags='bg_shape')
+        self.canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline=outline, tags='bg_shape')
+
+    def _redraw(self):
+        self.canvas.delete('bg_shape')
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w <= 1 or h <= 1:
+            h = self._target_h
+            w = 300
+
+        r = min(h // 2, self._radius)
+        b_col = self._focus_border if self._is_focused else self._border_color
+
+        # 외곽 테두리 렌더링 / Render Outer Border
+        self._draw_capsule(0, 0, w, h, r, b_col, '')
+        # 내부 배경 채우기 / Render Inner Background Fill
+        bw = 1
+        self._draw_capsule(bw, bw, w - bw, h - bw, max(1, r - bw), self._bg, '')
+
+        pad_x = max(14, r)
+        entry_w = max(10, w - 2 * pad_x)
+        self.canvas.coords(self.win_id, pad_x, h // 2)
+        self.canvas.itemconfigure(self.win_id, width=entry_w)
+
+    def _on_resize(self, event):
+        self._redraw()
+
+    def _on_focus_in(self, event):
+        self._is_focused = True
+        self._redraw()
+
+    def _on_focus_out(self, event):
+        self._is_focused = False
+        self._redraw()
+
+    # Entry 위젯 표준 메서드 위임 / Delegate Standard Entry Widget Methods
+    def get(self):
+        return self.entry.get()
+
+    def insert(self, index, string):
+        return self.entry.insert(index, string)
+
+    def delete(self, first, last=None):
+        return self.entry.delete(first, last)
+
+    def icursor(self, index):
+        return self.entry.icursor(index)
+
+    def xview(self, *args):
+        return self.entry.xview(*args)
+
+
+class RoundedBadge(tk.Canvas):
+    """
+    정적 타원형 정보 뱃지 위젯 / Static Rounded Capsule Badge Widget
+    마우스 클릭이나 호버 반응이 없는 순수 시각적 정보 뱃지입니다.
+    A static visual indicator badge with no click, hover, or button interactions.
+    """
+    def __init__(self, parent, text, bg, fg, font=('Segoe UI', 9), height=22):
+        dummy = tk.Label(parent, text=text, font=font)
+        text_w = dummy.winfo_reqwidth()
+        dummy.destroy()
+        w = text_w + 18
+
+        parent_bg = parent.cget('bg')
+        super().__init__(
+            parent, width=w, height=height, bg=parent_bg, bd=0, highlightthickness=0, relief=tk.FLAT
+        )
+        r = height // 2
+        # 좌우 반원 및 중앙 직사각형 / Left/Right Arcs and Center Rectangle
+        self.create_oval(0, 0, 2 * r, height, fill=bg, outline='')
+        self.create_oval(w - 2 * r, 0, w, height, fill=bg, outline='')
+        self.create_rectangle(r, 0, w - r, height, fill=bg, outline='')
+        self.create_text(w // 2, height // 2, text=text, fill=fg, font=font)
+
+
+class ModernCheckbox(tk.Frame):
+    """
+    모던 다크 테마 커스텀 체크박스 위젯 / Modern Dark Theme Custom Checkbox Widget
+    표준 Tkinter 체크박스보다 글자 크기에 맞춰 시각적으로 균형 잡힌 크기(18x18px)와 깔끔한 체크마크를 제공합니다.
+    """
+    def __init__(self, parent, text, variable, bg=C_BG_SIDEBAR, fg=C_TEXT_MAIN,
+                 box_size=18, font=('Segoe UI', 10), active_fg='#ffffff'):
+        super().__init__(parent, bg=bg, cursor='hand2')
+        self.var = variable
+        self.box_size = box_size
+        self.fg = fg
+        self.active_fg = active_fg
+        self.bg_color = bg
+
+        self.canvas = tk.Canvas(self, width=box_size, height=box_size, bg=bg, bd=0, highlightthickness=0)
+        self.canvas.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.lbl = tk.Label(self, text=text, font=font, fg=fg, bg=bg, cursor='hand2')
+        self.lbl.pack(side=tk.LEFT)
+
+        self.bind('<Button-1>', self._toggle)
+        self.canvas.bind('<Button-1>', self._toggle)
+        self.lbl.bind('<Button-1>', self._toggle)
+
+        self._is_hovered = False
+        self.bind('<Enter>', self._on_enter)
+        self.bind('<Leave>', self._on_leave)
+        self.canvas.bind('<Enter>', self._on_enter)
+        self.canvas.bind('<Leave>', self._on_leave)
+        self.lbl.bind('<Enter>', self._on_enter)
+        self.lbl.bind('<Leave>', self._on_leave)
+
+        # 변수 값 변경 시 자동 재렌더링 / Auto-redraw on variable change
+        try:
+            self.var.trace_add('write', lambda *args: self._draw())
+        except AttributeError:
+            self.var.trace('w', lambda *args: self._draw())
+
+        self._draw()
+
+    def _on_enter(self, event=None):
+        self._is_hovered = True
+        self.lbl.config(fg=self.active_fg)
+        self._draw()
+
+    def _on_leave(self, event=None):
+        self._is_hovered = False
+        self.lbl.config(fg=self.fg)
+        self._draw()
+
+    def _toggle(self, event=None):
+        self.var.set(not self.var.get())
+
+    def _draw(self):
+        self.canvas.delete('all')
+        s = self.box_size
+        val = self.var.get()
+
+        if val:
+            fill = C_ACCENT_BLUE if not self._is_hovered else C_ACCENT_BLUE_HOVER
+            border = fill
+        else:
+            fill = C_INPUT_BG
+            border = '#6e6e72' if self._is_hovered else '#4e4e52'
+
+        p = 1
+        self.canvas.create_rectangle(p, p, s - p, s - p, fill=fill, outline=border, width=1.5)
+
+        if val:
+            pts = [
+                p + s * 0.22, p + s * 0.50,
+                p + s * 0.44, p + s * 0.72,
+                p + s * 0.80, p + s * 0.28
+            ]
+            self.canvas.create_line(pts, fill='#ffffff', width=2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+
+
+
+# ==============================================================================
+# 내장 Fortinet 아이콘 (Base64) / Embedded Fortinet Icon (Self-contained)
+# ==============================================================================
+FORTINET_ICO_BASE64 = """
+AAABAAEAAAAAAAEAIABaKgAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAEAAAABAAgGAAAAXHKoZgAAAAFv
+ck5UAc+id5oAACoUSURBVHja7Z2Jdxz1le/nvwhYrZZkW1KrZcs2YCcZyAwZAkw2XsIACYQ185IQMolZ
+AtgQBhsCmYTMIY/zZmwGwiQhc4CXEzwQCCEnmZkEbGtp7XurW7bZbWxJlq2tu6ruu7+ltu7qVre8VVtf
+zPd0dau6un7bp+5vu/cvxpqqCYKg5am/QCZAEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQ
+AABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQ
+AABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBEAAAQRAAAEEQAABBAAAyAYIAAAiC
+AAAIggAACIIAAAiCAAAIggAACIIAAAiCAAAIggAACIIAAAiCAAAIggAACIIAAAiCAAAIggAACIIAAAiC
+AAAIggAACIIAgLNF0QLHEAQALBMABAl5AwEAZ71S3NilYtG8Y+QPBABAp9DSKNQFCfp7kHUSLeF7i/12
+sevCOgMAlpMFEDt1FkCyqaaidKYbmiqHmkABAGi4Jx8AATqZTzIAoPxySXNjDxIAsAzM5KSWOq6m0Vg1
+DTVWSQ00sPi1v+Fc6l19DvVp9UqdW5Z66ldQN19PvPYK6c/7GyI0UrbJGZH32d9YTX36WvK6fP3e+nMr
+SoONEUrGa3RjLLXRVtMIf0/k3bDIA37tbhDvxXHV4uVh/z4f99VzmcjvV+WpX5e/qAsiv733aNcZL8BT
+gWmIAgCnl+j+92nxWTzimMdjHg3Ha6mfC6ifTfFuVuvaVbR70xra/amN1Pr5i6ntS1+k7huvpb6vXk+9
+t3zlxPRVoWv5mK93y5e1rqXuKy6lvrX1fC81DpRkpYpXyYYelMYR/rzvrz9KA//7Jr7mDdT3jRup7+s3
+8evNNHDbjRWj/m/yfX/hcupds5JGOc3jspyieZaB6Cp5n9jJpirqu2QT9X+Nr3PLzVw+N1CPyAepUsrq
+eq2vyPN75Pev17qO8/Q66uHy6br+76j9i5fSG5d9lPZetIES62PU1VhDg2wdDDfVcjmoepSWXYaorHvp
+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
+0/RILx38/SuU/D8/osQ3bqY9l32CWlsaqL+xRvfxo7JenU1t5qwCQMreOyDNsYjubytq9zfyU0XAYF2M
+Oi75S2pjc67z5uup7/bbaIj72iP8tPVqmDW09Q4a2pKjrXf4P9fvB3O+7+ou6rnxaure0MhPwDpuAPb+
+8EjRLsBwUxV1XPZxGrj/Dup/eCv1PbRFWjOD2+5jbaWBbVt8GhSv21kPhUf98nUrJa6/knqbVeN3AVB4
+m6wMDhuros7P/A0N3r3ZUx7qddib994y2ZrzuTxW3wkqG3Gd/s23Uf+tN1P7dV+gPZ++mPZc0EztfH89
+/PuDcs1J1LnvpDPaDwCE0wKI22a12/jT0uyM0khcVz5+sow2RmmgUUQfqqYebpBB6uRzO0RftESJ8/vi
+QlEpMYhnX6tPdk2U2WtrMbfQIh2iK9PL3xWzHB36tZstiEpTH9/3SLzWZ/I7kM7xkOO85/QPiQhRojHq
+8mjlz7v4tauMskmIPSQFylion681GIvQcKOIRaGc0Yp6Ym/kGdf3KT4blqP9UQAg9IOEMXtKpkbFo2/y
+r9BSwRly/bPnSldIrbSunN7PfIrZOxddeQcqk840UbTM6c6IE0DCfYIWt4K8CvrM2WodC0hTgc9yV7cV
+/F4saC486k+3SI+YAVkkMEbKUw5i4VfSydecMtGgD7qfdE5e5O7Pt8sorWeWUvLeInrZeY1nbj+3zgAA
+IdxCbPcrVaORJhtTPqlHn+2tmekS12cXbOwFtPjehtIrT9JeSy43D1U5fhHGnDXmwUqeQckGF/OCTn+e
+s0BGNbKqIgCI6hmDGg/Uo87e+lS5ZaPvy/vqgirq5OuYHtlPOSP67qxEKuSOPQCAPIeikZy5ZZf2lTFy
+61on5TuUiJah6pN0bqH57+gJpD96SseLTufvAQAQBAEAEAQBABAEAQAQBAEAEAQBABAEAQAQBAEAEAQB
+ABAEAQAQBAEAEAQBABAEAQAQBAEAEAQBABAEAQAQBAEAEAQBABAEAQAQBAEAEAQBABAEAQAQBAAgEyAI
+AIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAI
+AIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAIAIAgCACAIAgAgCAI
+AIAgCACAIAgAgCAIAIAgCACAIAgAgCAAAJkAQQAABEEAAARBAAAEQctA/x/97mDHN/dlXgAAAABJRU5E
+rkJggg==
+"""
+
+
+def get_fortinet_icon_path():
+    """
+    내장된 Base64 아이콘 데이터를 임시 폴더에 캐싱하여 경로 반환
+    Caches embedded Base64 icon into temp directory and returns its file path.
+    """
+    try:
+        temp_dir = tempfile.gettempdir()
+        target_path = os.path.join(temp_dir, "_fortinet_embedded_v1.ico")
+        if not os.path.exists(target_path) or os.path.getsize(target_path) != 10864:
+            raw_data = base64.b64decode(FORTINET_ICO_BASE64.strip())
+            with open(target_path, "wb") as f_out:
+                f_out.write(raw_data)
+        return target_path
+    except Exception:
+        return ""
+
+
 class FortiGateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FortiGate Policy to Excel Exporter v1.0")
-        self.root.geometry("1000x720")
+        self.root.title("FortiGate Policy to Excel Exporter  v1.1")
         self.root.minsize(860, 480)
         self.root.configure(bg=C_BG_APP)
+
+        # 실행한 모니터의 작업 영역 정중앙에 창 배치 / Center window on active monitor
+        self._center_window(1000, 720)
+
+        # 창 제목 좌측의 기본 아이콘(깃털) 완전 제거 및 작업표시줄 아이콘 설정 / Completely remove title bar icon & configure taskbar icon
+        self._remove_title_icon()
 
         self.last_target_dir = ""
         self.is_running = False
 
         self._setup_styles()
         self._create_widgets()
+        # 윈도우 매핑 후 타이틀바 아이콘 제거 재확정 / Re-confirm title icon removal after window mapping
+        self.root.after(50, self._remove_title_icon)
+
+    def _center_window(self, width=1000, height=720):
+        """
+        현재 프로그램이 실행된 모니터의 작업 영역 정중앙에 창을 배치
+        Centers the window precisely in the work area of the active monitor.
+        """
+        positioned = False
+        x, y = 0, 0
+
+        if sys.platform == 'win32':
+            try:
+                from ctypes import windll, wintypes, Structure, byref
+
+                class POINT(Structure):
+                    _fields_ = [('x', wintypes.LONG), ('y', wintypes.LONG)]
+
+                class RECT(Structure):
+                    _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG),
+                                ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
+
+                class MONITORINFO(Structure):
+                    _fields_ = [('cbSize', wintypes.DWORD),
+                                ('rcMonitor', RECT),
+                                ('rcWork', RECT),
+                                ('dwFlags', wintypes.DWORD)]
+
+                user32 = windll.user32
+                pt = POINT()
+                user32.GetCursorPos(byref(pt))
+
+                MONITOR_DEFAULTTONEAREST = 2
+                h_mon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+                if h_mon:
+                    mi = MONITORINFO()
+                    mi.cbSize = ctypes.sizeof(MONITORINFO)
+                    if user32.GetMonitorInfoW(h_mon, byref(mi)):
+                        work_w = mi.rcWork.right - mi.rcWork.left
+                        work_h = mi.rcWork.bottom - mi.rcWork.top
+                        x = mi.rcWork.left + max(0, (work_w - width) // 2)
+                        y = mi.rcWork.top + max(0, (work_h - height) // 2)
+                        positioned = True
+            except Exception:
+                pass
+
+        if not positioned:
+            self.root.update_idletasks()
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = max(0, (sw - width) // 2)
+            y = max(0, (sh - height) // 2)
+
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _remove_title_icon(self):
+        """
+        창 제목 좌측의 기본 아이콘(깃털)은 완전히 숨기고, 작업표시줄에는 fortinet.ico를 표시
+        - Windows DWM 상에서 1x1 완전 투명 HICON 핸들을 ICON_SMALL에 적용 -> 창 제목줄 아이콘 완전 미표시
+        - fortinet.ico가 존재할 경우 ICON_BIG 및 Window Class Icon에 적용 -> 작업표시줄에는 Fortinet 아이콘 표시
+        - SetCurrentProcessExplicitAppUserModelID 설정으로 작업표시줄 앱 분리
+        """
+        if sys.platform != 'win32':
+            return
+        try:
+            from ctypes import windll, wintypes, Structure, byref
+
+            # 작업표시줄 AppUserModelID 등록 / Register AppUserModelID for Taskbar separation
+            try:
+                windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    'fortinet.fortigate.policytoexcel.exporter.1.0'
+                )
+            except Exception:
+                pass
+
+            self.root.update_idletasks()
+            user32 = windll.user32
+            gdi32 = windll.gdi32
+
+            hwnd = user32.GetParent(self.root.winfo_id())
+            if not hwnd:
+                hwnd = self.root.winfo_id()
+
+            # 1. 1x1 완전 투명 마스크 및 비트맵 생성 (창 제목줄 소형 아이콘 제거용) / 1. Create 1x1 fully transparent mask & bitmap (hides title bar icon)
+            hbmMask = gdi32.CreateBitmap(1, 1, 1, 1, None)
+            mask_bytes = (ctypes.c_ubyte * 1)(0xFF)
+            gdi32.SetBitmapBits(hbmMask, 1, mask_bytes)
+            hbmColor = gdi32.CreateBitmap(1, 1, 1, 32, None)
+
+            class ICONINFO(Structure):
+                _fields_ = [
+                    ('fIcon', wintypes.BOOL),
+                    ('xHotspot', wintypes.DWORD),
+                    ('yHotspot', wintypes.DWORD),
+                    ('hbmMask', wintypes.HBITMAP),
+                    ('hbmColor', wintypes.HBITMAP)
+                ]
+
+            ii = ICONINFO()
+            ii.fIcon = True
+            ii.xHotspot = 0
+            ii.yHotspot = 0
+            ii.hbmMask = hbmMask
+            ii.hbmColor = hbmColor
+
+            self._transparent_hicon = user32.CreateIconIndirect(byref(ii))
+            gdi32.DeleteObject(hbmMask)
+            gdi32.DeleteObject(hbmColor)
+
+            # 2. 작업표시줄용 fortinet.ico 아이콘 로드 (내장 Base64 데이터에서 자동 추출) / Load embedded fortinet.ico for Taskbar
+            fortinet_ico_path = get_fortinet_icon_path()
+            hIcon_big = self._transparent_hicon
+
+            if fortinet_ico_path and os.path.isfile(fortinet_ico_path):
+                IMAGE_ICON = 1
+                LR_LOADFROMFILE = 0x00000010
+                LR_DEFAULTSIZE = 0x00000040
+                loaded_icon = user32.LoadImageW(
+                    None, fortinet_ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE
+                )
+                if loaded_icon:
+                    hIcon_big = loaded_icon
+                    self._fortinet_hicon = loaded_icon
+
+            # 3. WM_SETICON 적용: SMALL은 투명, BIG은 fortinet.ico / 3. Apply WM_SETICON: Transparent for SMALL (title bar), fortinet.ico for BIG (taskbar)
+            WM_SETICON = 0x80
+            ICON_SMALL = 0
+            ICON_BIG = 1
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, self._transparent_hicon)
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hIcon_big)
+
+            # 작업표시줄 클래스 대형 아이콘 등록 / Register Class Icon for Taskbar
+            if hIcon_big != self._transparent_hicon:
+                GCLP_HICON = -14
+                SetClassLongPtr = getattr(user32, 'SetClassLongPtrW', user32.SetClassLongW)
+                SetClassLongPtr(hwnd, GCLP_HICON, hIcon_big)
+
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        except Exception:
+            pass
 
     def _setup_styles(self):
         self.style = ttk.Style()
@@ -1739,7 +2495,7 @@ class FortiGateGUI:
 
         title_lbl = tk.Label(
             title_left,
-            text="FORTIGATE CONFIG EXPORTER",
+            text="FORTIGATE POLICY TO EXCEL EXPORTER",
             font=('Segoe UI', 13, 'bold'),
             fg="#ffffff",
             bg=C_BG_SIDEBAR
@@ -1748,19 +2504,19 @@ class FortiGateGUI:
 
         subtitle_lbl = tk.Label(
             title_left,
-            text="FortiOS Policy & Object Parser",
+            text="FortiOS Firewall Policy & Object Exporter System",
             font=('Segoe UI', 10),
             fg=C_TEXT_MUTED,
             bg=C_BG_SIDEBAR
         )
         subtitle_lbl.pack(anchor=tk.W, pady=(2, 0))
 
-        # 우측 정보 배지 / Right-side Info Badges
+        # 우측 정적 정보 뱃지 / Right-side Static Info Badges
         badges_frame = tk.Frame(header_content, bg=C_BG_SIDEBAR)
         badges_frame.pack(side=tk.RIGHT, anchor=tk.E)
 
         self._create_badge(badges_frame, "FortiOS 6.x / 7.x", "#264f78", "#9cdcfe")
-        self._create_badge(badges_frame, "Multi-VDOM", "#37373d", "#cccccc")
+        self._create_badge(badges_frame, "Multi-vDOM", "#37373d", "#cccccc")
 
         # -------------------------------------------------------------
         # 2. 하단 상태 표시줄 / 2. Bottom Status Bar (Always Pinned to Bottom)
@@ -1770,7 +2526,7 @@ class FortiGateGUI:
 
         self.status_lbl = tk.Label(
             status_bar,
-            text="● 준비 완료 (대기 중)",
+            text="● Ready",
             font=('Segoe UI', 10),
             fg=C_STATUSBAR_FG,
             bg=C_STATUSBAR_BG
@@ -1803,7 +2559,7 @@ class FortiGateGUI:
         card_header.pack(fill=tk.X)
         tk.Label(
             card_header,
-            text="EXPLORER : CONFIGURATION & PATHS",
+            text="CONFIGURATION & PATHS",
             font=('Segoe UI', 10, 'bold'),
             fg=C_TEXT_MUTED,
             bg=C_BG_SIDEBAR
@@ -1817,103 +2573,86 @@ class FortiGateGUI:
 
         # 설정 파일 선택 행 / Config File Path Row
         tk.Label(
-            card_body, text="Config File (.conf):",
-            font=('Segoe UI', 10), fg=C_TEXT_MAIN, bg=C_BG_SIDEBAR, width=17, anchor=tk.W
-        ).grid(row=0, column=0, sticky=tk.W, pady=4)
+            card_body, text="Config File (.conf) :",
+            font=('Segoe UI', 10), fg=C_TEXT_MAIN, bg=C_BG_SIDEBAR, anchor=tk.W
+        ).grid(row=0, column=0, sticky=tk.W, pady=6)
 
-        self.entry_conf = tk.Entry(
-            card_body,
-            font=('Consolas', 10),
-            bg=C_INPUT_BG,
-            fg=C_INPUT_FG,
-            insertbackground="#ffffff",
-            relief=tk.FLAT,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=C_BORDER_LIGHT,
-            highlightcolor=C_ACCENT_BLUE
-        )
-        self.entry_conf.grid(row=0, column=1, sticky=tk.EW, padx=(6, 8), ipady=5)
+        self.entry_conf = RoundedEntry(card_body, height=34)
+        self.entry_conf.grid(row=0, column=1, sticky=tk.EW, padx=(10, 10), pady=6)
 
-        self.btn_browse_conf = self._create_button(
-            card_body, "Browse...", C_BTN_SECONDARY, C_BTN_SECONDARY_HOVER, self._browse_conf, font=('Segoe UI', 10), width=10
+        self.btn_browse_conf = RoundedButton(
+            card_body, "Select File...", C_BTN_SECONDARY, C_BTN_SECONDARY_HOVER, self._browse_conf,
+            font=('Segoe UI', 10), height=34, width=160
         )
-        self.btn_browse_conf.grid(row=0, column=2, pady=4)
+        self.btn_browse_conf.grid(row=0, column=2, pady=6)
 
         # 출력 디렉터리 선택 행 / Output Directory Path Row
         tk.Label(
-            card_body, text="Output Directory:",
-            font=('Segoe UI', 10), fg=C_TEXT_MAIN, bg=C_BG_SIDEBAR, width=17, anchor=tk.W
-        ).grid(row=1, column=0, sticky=tk.W, pady=4)
+            card_body, text="Output Directory :",
+            font=('Segoe UI', 10), fg=C_TEXT_MAIN, bg=C_BG_SIDEBAR, anchor=tk.W
+        ).grid(row=1, column=0, sticky=tk.W, pady=6)
 
-        self.entry_out = tk.Entry(
-            card_body,
-            font=('Consolas', 10),
-            bg=C_INPUT_BG,
-            fg=C_INPUT_FG,
-            insertbackground="#ffffff",
-            relief=tk.FLAT,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=C_BORDER_LIGHT,
-            highlightcolor=C_ACCENT_BLUE
-        )
-        self.entry_out.grid(row=1, column=1, sticky=tk.EW, padx=(6, 8), ipady=5)
+        self.entry_out = RoundedEntry(card_body, height=34)
+        self.entry_out.grid(row=1, column=1, sticky=tk.EW, padx=(10, 10), pady=6)
 
-        self.btn_browse_out = self._create_button(
-            card_body, "Browse...", C_BTN_SECONDARY, C_BTN_SECONDARY_HOVER, self._browse_out, font=('Segoe UI', 10), width=10
+        self.btn_browse_out = RoundedButton(
+            card_body, "Select Folder...", C_BTN_SECONDARY, C_BTN_SECONDARY_HOVER, self._browse_out,
+            font=('Segoe UI', 10), height=34, width=160
         )
-        self.btn_browse_out.grid(row=1, column=2, pady=4)
+        self.btn_browse_out.grid(row=1, column=2, pady=6)
 
         card_body.columnconfigure(1, weight=1)
 
-        # 옵션 체크박스 / Option Checkboxes
+        # 옵션 체크박스 / Option Checkboxes (좌측 라벨과 동일하게 열 0부터 시작하여 정렬)
         opt_frame = tk.Frame(card_body, bg=C_BG_SIDEBAR)
-        opt_frame.grid(row=2, column=1, columnspan=2, sticky=tk.W, pady=(8, 2))
+        opt_frame.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(12, 4))
 
         self.var_open_folder = tk.BooleanVar(value=True)
-        chk_open = tk.Checkbutton(
+        self.chk_open = ModernCheckbox(
             opt_frame,
-            text=" 변환 완료 후 결과 폴더 자동으로 열기 (Auto-open result directory)",
-            variable=self.var_open_folder,
+            "Automatically open result directory upon completion",
+            self.var_open_folder,
             bg=C_BG_SIDEBAR,
             fg=C_TEXT_MAIN,
-            selectcolor=C_INPUT_BG,
-            activebackground=C_BG_SIDEBAR,
-            activeforeground="#ffffff",
-            highlightthickness=0,
-            bd=0,
+            box_size=18,
             font=('Segoe UI', 10)
         )
-        chk_open.pack(side=tk.LEFT)
+        self.chk_open.pack(side=tk.LEFT)
 
         # -------------------------------------------------------------
         # 4. 액션 바 (변환 실행 및 결과 폴더 열기) / 4. Action Bar (Execution & Results)
         # -------------------------------------------------------------
         action_frame = tk.Frame(main_container, bg=C_BG_APP)
-        action_frame.pack(fill=tk.X, pady=(2, 10))
+        action_frame.pack(fill=tk.X, pady=(4, 12))
 
-        self.btn_run = self._create_button(
+        # 두 버튼의 비율을 이상적인 7:3 비율로 배분 / Balanced Grid Layout (7:3 Ratio)
+        action_frame.columnconfigure(0, weight=7) # 엑셀 변환 실행 / Export Policy to Excel
+        action_frame.columnconfigure(1, weight=3) # 결과 폴더 열기 / Open Result Folder
+
+        # 왼쪽 '엑셀 정책 변환 실행' 버튼 (문서 .xlsx 벡터 아이콘 적용) / Left-side 'Export Policy to Excel' Button with XLSX Document Icon
+        self.btn_run = RoundedButton(
             action_frame,
-            "▶  엑셀 변환 실행 (Start Conversion)",
+            "Export Policy to Excel",
             C_BTN_PRIMARY,
             C_BTN_PRIMARY_HOVER,
             self._start_conversion,
             font=('Segoe UI', 11, 'bold'),
-            pad=(16, 9)
+            height=42,
+            icon_type='xlsx'
         )
-        self.btn_run.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_run.grid(row=0, column=0, sticky=tk.EW, padx=(0, 6))
 
-        self.btn_open_res = self._create_button(
+        # 오른쪽 '결과 폴더 열기' 버튼 / Right-side 'Open Result Folder' Button
+        self.btn_open_res = RoundedButton(
             action_frame,
-            "📁 결과 폴더 열기 (Open Folder)",
+            "📁  Open Result Folder",
             C_BTN_SECONDARY,
             C_BTN_SECONDARY_HOVER,
             self._open_result_folder,
             font=('Segoe UI', 10),
-            pad=(16, 9)
+            height=42
         )
-        self.btn_open_res.pack(side=tk.RIGHT, padx=(10, 0))
+        self.btn_open_res.grid(row=0, column=1, sticky=tk.EW, padx=(6, 0))
         self._set_btn_state(self.btn_open_res, False)
 
         # -------------------------------------------------------------
@@ -1927,7 +2666,7 @@ class FortiGateGUI:
         self.progressbar.pack(fill=tk.X, pady=(0, 6))
 
         # -------------------------------------------------------------
-        # 5. 터미널 콘솔 패널 (통합 터미널 스타일) / 5. Terminal Console Panel (Integrated Terminal Style)
+        # 5. 터미널 콘솔 패널 (인터랙티브 탭 시스템) / 5. Terminal Console Panel (Interactive Tab System)
         # -------------------------------------------------------------
         terminal_panel = tk.Frame(
             main_container, bg=C_BG_PANEL, bd=0, highlightthickness=1, highlightbackground=C_BORDER
@@ -1938,128 +2677,216 @@ class FortiGateGUI:
         tab_bar = tk.Frame(terminal_panel, bg=C_BG_SIDEBAR, height=30)
         tab_bar.pack(fill=tk.X, side=tk.TOP)
 
-        # 탭 라벨 목록 / Tab Labels
-        self._create_tab(tab_bar, "PROBLEMS  0", active=False)
-        self._create_tab(tab_bar, "OUTPUT", active=True)
-        self._create_tab(tab_bar, "DEBUG CONSOLE", active=False)
-        self._create_tab(tab_bar, "TERMINAL", active=False)
-
         # 우측 로그 지우기 버튼 / Right-side Clear Button
-        btn_clear = tk.Button(
+        btn_clear = RoundedButton(
             tab_bar,
             text="⊘ Clear",
             bg=C_BG_SIDEBAR,
+            hover_bg=C_BORDER,
+            cmd=self._clear_log,
             fg=C_TEXT_MUTED,
-            activebackground=C_BG_SIDEBAR,
-            activeforeground="#ffffff",
-            bd=0,
-            relief=tk.FLAT,
-            font=('Segoe UI', 10),
-            cursor='hand2',
-            command=self._clear_log
+            font=('Segoe UI', 9),
+            height=24,
+            width=70,
+            border_color=C_BORDER,
+            border_width=1
         )
-        btn_clear.pack(side=tk.RIGHT, padx=10)
+        btn_clear.pack(side=tk.RIGHT, padx=10, pady=3)
 
-        # 로그 텍스트 영역 / Log Text Area
-        self.log_text = scrolledtext.ScrolledText(
-            terminal_panel,
-            wrap=tk.WORD,
-            font=('Consolas', 10),
-            bg=C_BG_PANEL,
-            fg=C_TEXT_MAIN,
-            insertbackground="#ffffff",
-            selectbackground="#264f78",
-            relief=tk.FLAT,
-            bd=0,
-            padx=10,
-            pady=8
-        )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        # 인터랙티브 탭 시스템 구축 / Build Interactive Tab System
+        self._tabs = {}
+        self._tab_views = {}
+        self._active_tab = "OUTPUT"
+        self._problem_count = 0
 
-        # 태그 색상 설정 (구문 강조) / Tag Color Configurations (Syntax Highlighting)
-        self.log_text.tag_config('info', foreground=C_TAG_INFO)
-        self.log_text.tag_config('vdom', foreground=C_TAG_VDOM, font=('Consolas', 10, 'bold'))
-        self.log_text.tag_config('success', foreground=C_TAG_SUCCESS, font=('Consolas', 10, 'bold'))
-        self.log_text.tag_config('error', foreground=C_TAG_ERROR, font=('Consolas', 10, 'bold'))
-        self.log_text.tag_config('comment', foreground=C_TAG_COMMENT)
-        self.log_text.tag_config('muted', foreground=C_TEXT_MUTED)
+        tab_defs = [
+            ("PROBLEMS", "PROBLEMS  0"),
+            ("OUTPUT", "OUTPUT"),
+            ("DEBUG CONSOLE", "DEBUG CONSOLE"),
+            ("TERMINAL", "TERMINAL")
+        ]
 
-        # 초기 환영 메시지 / Initial Welcome Message
-        self._log_raw("FortiGate Config -> Excel Converter initialized.\n", 'muted')
-        self._log_raw("Select a .conf file and click 'Start Conversion' to begin.\n\n", 'muted')
+        view_container = tk.Frame(terminal_panel, bg=C_BG_PANEL)
+        view_container.pack(fill=tk.BOTH, expand=True)
+
+        for tab_id, label_text in tab_defs:
+            txt = scrolledtext.ScrolledText(
+                view_container,
+                wrap=tk.WORD,
+                font=('Consolas', 10),
+                bg=C_BG_PANEL,
+                fg=C_TEXT_MAIN,
+                insertbackground="#ffffff",
+                selectbackground="#264f78",
+                relief=tk.FLAT,
+                bd=0,
+                padx=10,
+                pady=8
+            )
+            txt.tag_config('info', foreground=C_TAG_INFO)
+            txt.tag_config('vdom', foreground=C_TAG_VDOM, font=('Consolas', 10, 'bold'))
+            txt.tag_config('success', foreground=C_TAG_SUCCESS, font=('Consolas', 10, 'bold'))
+            txt.tag_config('error', foreground=C_TAG_ERROR, font=('Consolas', 10, 'bold'))
+            txt.tag_config('comment', foreground=C_TAG_COMMENT)
+            txt.tag_config('muted', foreground=C_TEXT_MUTED)
+
+            self._tab_views[tab_id] = txt
+
+            # 탭 헤더 라벨 및 밑줄 / Tab Header Label & Underline Indicator
+            t_frame = tk.Frame(tab_bar, bg=C_BG_SIDEBAR, cursor='hand2')
+            t_frame.pack(side=tk.LEFT, padx=6, fill=tk.Y)
+
+            lbl = tk.Label(
+                t_frame, text=label_text, font=('Segoe UI', 10),
+                fg=C_TEXT_MUTED, bg=C_BG_SIDEBAR, pady=5, cursor='hand2'
+            )
+            lbl.pack()
+
+            underline = tk.Frame(t_frame, bg=C_BG_SIDEBAR, height=2)
+            underline.pack(fill=tk.X, side=tk.BOTTOM)
+
+            self._tabs[tab_id] = {
+                'frame': t_frame,
+                'label': lbl,
+                'underline': underline,
+                'base_text': label_text
+            }
+
+            def make_handler(tid=tab_id):
+                return lambda e: self._switch_tab(tid)
+
+            t_frame.bind('<Button-1>', make_handler())
+            lbl.bind('<Button-1>', make_handler())
+            underline.bind('<Button-1>', make_handler())
+
+            def make_hover_enter(tid=tab_id):
+                return lambda e: self._on_tab_hover(tid, True)
+            def make_hover_leave(tid=tab_id):
+                return lambda e: self._on_tab_hover(tid, False)
+
+            t_frame.bind('<Enter>', make_hover_enter())
+            t_frame.bind('<Leave>', make_hover_leave())
+            lbl.bind('<Enter>', make_hover_enter())
+            lbl.bind('<Leave>', make_hover_leave())
+
+        self.log_text = self._tab_views["OUTPUT"]
+        self.problems_text = self._tab_views["PROBLEMS"]
+        self.debug_text = self._tab_views["DEBUG CONSOLE"]
+        self.terminal_text = self._tab_views["TERMINAL"]
+
+        self._switch_tab("OUTPUT")
+        self._init_tab_contents()
 
     # -------------------------------------------------------------
     # 헬퍼 메서드: 위젯 커스텀 생성 / Helper Methods: Custom Widget Creation
     # -------------------------------------------------------------
     def _create_badge(self, parent, text, bg, fg):
-        lbl = tk.Label(
-            parent, text=text, font=('Segoe UI', 10),
-            bg=bg, fg=fg, padx=7, pady=3
+        """
+        정적 타원형 정보 뱃지 생성 / Create Static Oval/Capsule Info Badge
+        """
+        badge = RoundedBadge(parent, text=text, bg=bg, fg=fg, font=('Segoe UI', 9), height=22)
+        badge.pack(side=tk.LEFT, padx=3)
+
+    def _switch_tab(self, tab_id):
+        """
+        인터랙티브 탭 전환 핸들러 / Interactive Tab Switch Handler
+        """
+        self._active_tab = tab_id
+        for tid, tab in self._tabs.items():
+            if tid == tab_id:
+                tab['label'].config(fg="#ffffff", font=('Segoe UI', 10, 'bold'))
+                tab['underline'].config(bg=C_ACCENT_BLUE)
+            else:
+                tab['label'].config(fg=C_TEXT_MUTED, font=('Segoe UI', 10))
+                tab['underline'].config(bg=C_BG_SIDEBAR)
+
+        for tid, view in self._tab_views.items():
+            if tid == tab_id:
+                view.pack(fill=tk.BOTH, expand=True)
+            else:
+                view.pack_forget()
+
+    def _on_tab_hover(self, tab_id, is_enter):
+        if self._active_tab != tab_id:
+            color = "#ffffff" if is_enter else C_TEXT_MUTED
+            self._tabs[tab_id]['label'].config(fg=color)
+
+    def _init_tab_contents(self):
+        """
+        각 탭의 초기 안내 정보 초기화 / Initialize Tab Contents
+        """
+        # OUTPUT 탭 초기 메시지 / Initial OUTPUT Tab Message
+        self._log_raw("FortiGate Config -> Excel Converter initialized.\n", 'muted')
+        self._log_raw("Select a .conf file and click 'Start Conversion' to begin.\n\n", 'muted')
+
+        # PROBLEMS 탭 초기 메시지 / Initial PROBLEMS Tab Message
+        self.problems_text.insert(tk.END, "No problems have been detected in the workspace.\n", 'muted')
+
+        # DEBUG CONSOLE 탭 초기 메시지 / Initial DEBUG CONSOLE Tab Message
+        self.debug_text.insert(tk.END, "[Debug Console : Policy Parser Diagnostics]\n", 'info')
+        self.debug_text.insert(tk.END, "Ready to capture VDOM breakdown, policy counts, and object mapping metrics.\n", 'muted')
+
+        # TERMINAL 환경 및 진단 정보 / TERMINAL Environment & Diagnostics Information
+        import platform
+        try:
+            import openpyxl
+            openpyxl_ver = openpyxl.__version__
+        except Exception:
+            openpyxl_ver = "Unknown"
+
+        py_ver = platform.python_version()
+        sys_os = platform.system() + " " + platform.release()
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        term_info = (
+            f"FortiGate Policy to Excel - Environment Console\n"
+            f"--------------------------------------------------\n"
+            f"• Python Version     : {py_ver} ({sys.executable})\n"
+            f"• Operating System   : {sys_os} (High-DPI Aware v2)\n"
+            f"• OpenPyXL Engine    : {openpyxl_ver}\n"
+            f"• Workspace Root     : {script_dir}\n"
+            f"\n"
+            f"[CLI Execution Syntax]\n"
+            f"  python fortigate_policy_to_excel.py <config_path> [output_dir]\n"
+            f"  python fortigate_policy_to_excel.py --gui\n"
+            f"\n"
+            f"[Features Active]\n"
+            f"  ✔ Recursive Address / Service Group Resolution\n"
+            f"  ✔ 32-Column Firewall Policy Multi-row Flattening\n"
+            f"  ✔ Individual VDOM Workbooks + TOTAL_SUMMARY.xlsx\n"
         )
-        lbl.pack(side=tk.LEFT, padx=3)
+        self.terminal_text.insert(tk.END, term_info, 'muted')
 
-    def _create_tab(self, parent, text, active=False):
-        frame = tk.Frame(parent, bg=C_BG_SIDEBAR)
-        frame.pack(side=tk.LEFT, padx=8, fill=tk.Y)
-
-        fg = "#ffffff" if active else C_TEXT_MUTED
-        lbl = tk.Label(frame, text=text, font=('Segoe UI', 10, 'bold' if active else 'normal'),
-                       fg=fg, bg=C_BG_SIDEBAR, pady=4)
-        lbl.pack()
-
-        if active:
-            underline = tk.Frame(frame, bg=C_ACCENT_BLUE, height=2)
-            underline.pack(fill=tk.X, side=tk.BOTTOM)
-
-    def _create_button(self, parent, text, bg, hover_bg, cmd, font=('Segoe UI', 10), pad=(10, 4), width=None):
-        btn = tk.Button(
-            parent,
-            text=text,
-            bg=bg,
-            fg="#ffffff",
-            activebackground=hover_bg,
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            bd=0,
-            font=font,
-            cursor='hand2',
-            padx=pad[0],
-            pady=pad[1],
-            command=cmd
+    def _create_button(self, parent, text, bg, hover_bg, cmd, font=('Segoe UI', 10), height=34, width=None):
+        """
+        타원형 버튼 생성 헬퍼 / Oval Button Helper
+        """
+        return RoundedButton(
+            parent, text=text, bg=bg, hover_bg=hover_bg, cmd=cmd,
+            font=font, height=height, width=width
         )
-        if width:
-            btn.config(width=width)
-
-        btn._orig_bg = bg
-        btn._hover_bg = hover_bg
-
-        def on_enter(e):
-            if str(btn['state']) != 'disabled':
-                btn.config(bg=btn._hover_bg)
-
-        def on_leave(e):
-            if str(btn['state']) != 'disabled':
-                btn.config(bg=btn._orig_bg)
-
-        btn.bind("<Enter>", on_enter)
-        btn.bind("<Leave>", on_leave)
-        return btn
 
     def _set_btn_state(self, btn, enabled):
-        if enabled:
-            btn.config(state=tk.NORMAL, bg=btn._orig_bg, fg="#ffffff", cursor='hand2')
+        """
+        버튼 활성화/비활성화 상태 설정 / Set Button Enabled/Disabled State
+        """
+        if hasattr(btn, 'set_state'):
+            btn.set_state('normal' if enabled else 'disabled')
         else:
-            btn.config(state=tk.DISABLED, bg=C_BTN_DISABLED, fg=C_BTN_DISABLED_FG, cursor='arrow')
+            if enabled:
+                btn.config(state=tk.NORMAL, bg=getattr(btn, '_orig_bg', C_BTN_PRIMARY), fg="#ffffff", cursor='hand2')
+            else:
+                btn.config(state=tk.DISABLED, bg=C_BTN_DISABLED, fg=C_BTN_DISABLED_FG, cursor='arrow')
 
     # -------------------------------------------------------------
     # 이벤트 핸들러 / Event Handlers
     # -------------------------------------------------------------
     def _browse_conf(self):
         fpath = filedialog.askopenfilename(
-            title="FortiGate 설정 파일 선택",
+            title="Select FortiGate Configuration File",
             filetypes=[
-                ("FortiGate Config", "*.conf;*.txt;*.cfg"),
-                ("모든 파일", "*.*")
+                ("FortiGate Config", "*.conf"),
+                ("All Files", "*.*")
             ]
         )
         if fpath:
@@ -2073,17 +2900,22 @@ class FortiGateGUI:
                 self.entry_out.insert(0, dir_path)
 
             fname = os.path.basename(fpath)
-            self._set_status(f"✔ 파일 로드됨: {fname}", 0)
+            self._set_status(f"✔ File loaded: {fname}", 0)
 
     def _browse_out(self):
-        dpath = filedialog.askdirectory(title="출력 폴더 선택")
+        dpath = filedialog.askdirectory(title="Select Output Directory")
         if dpath:
             dpath = os.path.normpath(dpath)
             self.entry_out.delete(0, tk.END)
             self.entry_out.insert(0, dpath)
 
     def _clear_log(self):
-        self.log_text.delete('1.0', tk.END)
+        """
+        현재 활성화된 탭의 텍스트 영역 비우기 / Clear Current Tab Log Area
+        """
+        active_view = self._tab_views.get(self._active_tab)
+        if active_view:
+            active_view.delete('1.0', tk.END)
 
     def _log_raw(self, text, tag=None):
         def append():
@@ -2102,16 +2934,27 @@ class FortiGateGUI:
                 self.log_text.insert(tk.END, line, 'info')
             elif stripped.startswith("[") and ("VDOM" in stripped or "/" in stripped[:6]):
                 self.log_text.insert(tk.END, line, 'vdom')
-            elif "[생성 완료]" in stripped or "[성공]" in stripped or "[총괄 요약 완료]" in stripped:
+            elif "[SUCCESS]" in stripped or "[SUMMARY COMPLETE]" in stripped or "[생성 완료]" in stripped or "[성공]" in stripped or "[총괄 요약 완료]" in stripped:
                 self.log_text.insert(tk.END, line, 'success')
             elif "[ERROR]" in stripped or "[오류]" in stripped:
                 self.log_text.insert(tk.END, line, 'error')
+                self._record_problem(line)
             elif stripped.startswith("-") or stripped.startswith("->"):
                 self.log_text.insert(tk.END, line, 'comment')
             else:
                 self.log_text.insert(tk.END, line)
             self.log_text.see(tk.END)
         self.root.after(0, append)
+
+    def _record_problem(self, text):
+        """
+        오류 발생 시 PROBLEMS 탭에 기록 및 카운트 갱신 / Record Issue to PROBLEMS Tab
+        """
+        if self._problem_count == 0:
+            self.problems_text.delete('1.0', tk.END)
+        self._problem_count += 1
+        self.problems_text.insert(tk.END, f"[{self._problem_count}] {text}", 'error')
+        self._tabs["PROBLEMS"]['label'].config(text=f"PROBLEMS  {self._problem_count}")
 
     def _set_status(self, text, progress_pct=None):
         def update():
@@ -2131,10 +2974,10 @@ class FortiGateGUI:
         out_dir = self.entry_out.get().strip()
 
         if not conf_file:
-            messagebox.showwarning("입력 필요", "FortiGate Config 파일(.conf)을 선택해주세요.")
+            messagebox.showwarning("Input Required", "Please select a FortiGate configuration file (.conf).")
             return
         if not os.path.isfile(conf_file):
-            messagebox.showerror("오류", f"지정된 파일이 존재하지 않습니다:\n{conf_file}")
+            messagebox.showerror("File Not Found", f"The specified configuration file does not exist:\n{conf_file}")
             return
 
         if not out_dir:
@@ -2152,26 +2995,26 @@ class FortiGateGUI:
 
     def _run_process(self, conf_file, out_dir):
         try:
-            self._set_status("⟳ Config 파일 로딩 중...", 5)
-            self._log(f"[*] Config 로드 시작: {conf_file}")
+            self._set_status("⟳ Loading configuration file...", 5)
+            self._log(f"[*] Loading FortiGate configuration: {conf_file}")
 
             with open(conf_file, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.read().split('\n')
-            self._log(f"    - 총 {len(lines):,} 라인 읽기 완료")
+            self._log(f"    - Read {len(lines):,} lines successfully")
 
             # 1. 호스트네임 추출 / 1. Extract Hostname
             hostname = parse_hostname(lines, default_name="FortiGate")
             target_dir = os.path.join(out_dir, hostname)
             os.makedirs(target_dir, exist_ok=True)
             self.last_target_dir = target_dir
-            self._log(f"[*] 호스트네임: {hostname}")
-            self._log(f"[*] 출력 디렉토리: {target_dir}")
+            self._log(f"[*] Hostname: {hostname}")
+            self._log(f"[*] Target Directory: {target_dir}")
 
             # 2. VDOM 경계 분석 / 2. Analyze VDOM Boundaries
-            self._set_status("⟳ VDOM 경계 분석 중...", 10)
+            self._set_status("⟳ Analyzing VDOM boundaries...", 10)
             vdom_sections = find_vdom_boundaries(lines)
             num_vdoms = len(vdom_sections)
-            self._log(f"[*] {num_vdoms}개 VDOM 감지: {', '.join(v[0] for v in vdom_sections)}")
+            self._log(f"[*] {num_vdoms} VDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
 
             # 3. VDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per VDOM & Generate Individual Excel Files
             summary_list = []
@@ -2179,8 +3022,8 @@ class FortiGateGUI:
 
             for idx, (vdom_name, vs, ve) in enumerate(vdom_sections, 1):
                 pct = 10 + int((idx / num_vdoms) * 80)
-                self._set_status(f"⟳ 처리 중 ({idx}/{num_vdoms}): {vdom_name}", pct)
-                self._log(f"\n[{idx}/{num_vdoms}] VDOM '{vdom_name}' ({vs+1:,} ~ {ve+1:,} 라인) 분석 중...")
+                self._set_status(f"⟳ Processing ({idx}/{num_vdoms}): {vdom_name}", pct)
+                self._log(f"\n[{idx}/{num_vdoms}] Parsing VDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
 
                 addr_dict = parse_address_objects(lines, vs, ve)
                 addrgrp_dict = parse_addrgrp_objects(lines, vs, ve)
@@ -2219,10 +3062,10 @@ class FortiGateGUI:
                 vdom_file_path = os.path.join(target_dir, clean_vdom_filename)
                 export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
                                                 resolver, obj_counts, vdom_file_path)
-                self._log(f"    -> [생성 완료] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]})")
+                self._log(f"    -> [SUCCESS] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]})")
 
             # 4. 전체 요약 엑셀 생성 / 4. Generate Total Summary Excel
-            self._set_status("⟳ 총괄 요약 파일 생성 중...", 95)
+            self._set_status("⟳ Building total summary workbook...", 95)
             total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
             wb_tot = Workbook()
             ws_tot = wb_tot.active
@@ -2255,17 +3098,17 @@ class FortiGateGUI:
 
             auto_fit(ws_tot, min_w=12)
             wb_tot.save(total_summary_path)
-            self._log(f"\n[*] [총괄 요약 완료] _TOTAL_SUMMARY.xlsx")
+            self._log(f"\n[*] [SUMMARY COMPLETE] _TOTAL_SUMMARY.xlsx")
 
-            self._set_status("✔ 모든 엑셀 변환 완료", 100)
-            self._log(f"\n[성공] 총 {num_vdoms}개 VDOM 엑셀 파일이 '{target_dir}' 폴더에 생성되었습니다.")
+            self._set_status("✔ All Excel workbooks generated successfully", 100)
+            self._log(f"\n[SUCCESS] Total {num_vdoms} VDOM Excel files exported to '{target_dir}'.")
 
             self.root.after(0, self._on_success)
 
         except Exception as ex:
-            self._set_status(f"✖ 오류 발생: {str(ex)}", 0)
-            self._log(f"\n[ERROR] 변환 중 오류 발생:\n{str(ex)}")
-            self.root.after(0, lambda: messagebox.showerror("변환 오류", f"변환 중 오류가 발생했습니다:\n{str(ex)}"))
+            self._set_status(f"✖ Error occurred: {str(ex)}", 0)
+            self._log(f"\n[ERROR] An error occurred during export:\n{str(ex)}")
+            self.root.after(0, lambda: messagebox.showerror("Export Error", f"An error occurred during export:\n{str(ex)}"))
         finally:
             self.is_running = False
             self.root.after(0, lambda: self._set_btn_state(self.btn_run, True))
@@ -2292,9 +3135,19 @@ class FortiGateGUI:
 def run_gui():
     """모던 다크 테마 GUI 실행 / Launch Modern Dark Theme GUI"""
     if not HAS_TKINTER:
-        print("[ERROR] Tkinter 모듈을 불러올 수 없어 GUI를 실행할 수 없습니다.")
+        print("[ERROR] Tkinter module is not available. GUI cannot start.")
         print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
         sys.exit(1)
+
+    # Windows 작업표시줄 독립 앱 ID 설정 / Set AppUserModelID for independent taskbar icon
+    if sys.platform == 'win32':
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'fortinet.fortigate.policytoexcel.exporter.1.0'
+            )
+        except Exception:
+            pass
+
     root = tk.Tk()
     app = FortiGateGUI(root)
     root.mainloop()
@@ -2429,6 +3282,12 @@ def main():
     # 인자가 없거나 --gui 플래그인 경우 GUI 모드로 실행 / Run in GUI mode if no args or --gui flag is provided
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
         run_gui()
+    elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
+        print("FortiGate Policy to Excel Exporter v1.1")
+        print("Usage:")
+        print("  GUI Mode : python fortigate_policy_to_excel.py [--gui]")
+        print("  CLI Mode : python fortigate_policy_to_excel.py <config_file> [output_dir]")
+        sys.exit(0)
     else:
         run_cli()
 
