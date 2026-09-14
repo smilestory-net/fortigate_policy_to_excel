@@ -178,7 +178,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 30: Sec Profile        - Applied security profiles (SSL/SSH, IPS, AV, WebFilter, etc. combined with newlines)
   Col 31: Sec Profile Comment- Comments from each security profile (1:1 mapping with newlines)
   Col 32: Log Traffic        - Traffic logging (all / utm / disable combined with session-start)
-  Col 33: Policy Comment     - Policy-level comments
+  Col 33: Comment            - Policy-level comments
 ```
 
 ### 2. Local-in Policy Sheet Column Structure (22 Columns)
@@ -214,7 +214,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 
 [General]
   Col 21: Schedule           - Schedule
-  Col 22: Comments           - Policy comments
+  Col 22: Comment            - Policy comments
 ```
 
 ### 3. Central-NAT Sheet Column Structure (21 Columns)
@@ -246,8 +246,8 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 17: NAT IP Pool Name   - Target NAT IP Pool name
   Col 18: NAT Pool IP        - Translated NAT Pool IP range
   Col 19: NAT Pool Type      - IP Pool type (overload, one-to-one, etc.)
-  Col 20: NAT                - NAT status (enable / disable)
-  Col 21: Comments           - NAT rule comments
+  Col 20: NAT                - NAT enabled status (enable / disable)
+  Col 21: Comment            - NAT rule comments
 ```
 
 ### 4. DNAT (VIP) Sheet Column Structure (18 Columns)
@@ -312,16 +312,16 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 18: Svc Port           - Service port number
   Col 19: Svc Comment        - Service object comment
 
-[Policy Comment]
-  Col 20: Comments           - DoS policy comments
-
 [Anomaly Detection]
-  Col 21: Anomaly Name       - Attack / anomaly pattern name (e.g., tcp_syn_flood)
-  Col 22: Anomaly Status     - Anomaly defense status (enable / disable)
-  Col 23: Anomaly Log        - Logging status (enable / disable)
-  Col 24: Anomaly Quarant    - Quarantine action (attacker / disable)
-  Col 25: Anomaly Action     - Mitigation action (pass / block / disable)
-  Col 26: Anomaly Threshold  - Trigger threshold (packets/second)
+  Col 20: Anomaly Name       - Attack / anomaly pattern name (e.g., tcp_syn_flood)
+  Col 21: Anomaly Status     - Anomaly defense status (enable / disable)
+  Col 22: Anomaly Log        - Logging status (enable / disable)
+  Col 23: Anomaly Quarant    - Quarantine action (attacker / disable)
+  Col 24: Anomaly Action     - Mitigation action (pass / block / disable)
+  Col 25: Anomaly Threshold  - Trigger threshold (packets/second)
+
+[Policy Comment]
+  Col 26: Comment            - DoS policy comments
 ```
 
 ### 6. External Resource Sheet Column Structure (9 Columns)
@@ -335,7 +335,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 6: Resource URL        - External feed download URL
   Col 7: Refresh Rate (min)  - Refresh interval in minutes
   Col 8: Source IP           - Source IP interface used for external connection
-  Col 9: Comments            - Resource comments
+  Col 9: Comment             - Resource comments
 ```
 
 ---
