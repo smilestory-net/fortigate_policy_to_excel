@@ -503,17 +503,106 @@ def parse_ippool_objects(lines, vdom_start, vdom_end):
     return pools
 
 
+def parse_security_profile_comments(lines, start, end):
+    """
+    FortiGate 보안 프로파일들의 코멘트 수집
+    """
+    profile_comments = {}
+    sec_names = [
+        "firewall ssl-ssh-profile", "ips sensor", "antivirus profile",
+        "webfilter profile", "dnsfilter profile", "application list",
+        "file-filter profile", "emailfilter profile", "dlp sensor",
+        "dlp profile", "waf profile", "casb profile", "videofilter profile",
+        "sctp-filter profile", "cifs profile", "virtual-patch profile",
+        "voip profile"
+    ]
+    for sec in sec_names:
+        for sr, er in find_section_range(lines, start, end, sec):
+            i = sr + 1
+            cur_prof = None
+            depth = 1
+            while i <= er:
+                line = lines[i]
+                s = line.strip()
+                if s.startswith("config "):
+                    depth += 1
+                elif s == "end":
+                    depth -= 1
+                elif depth == 1:
+                    if s.startswith("edit "):
+                        cur_prof = parse_edit_id(line)
+                    elif s.startswith("set "):
+                        f = get_field_name(line)
+                        if f in ('comment', 'comments') and cur_prof:
+                            profile_comments[cur_prof] = parse_set_value(line)
+                    elif s == "next":
+                        cur_prof = None
+                i += 1
+    return profile_comments
+
+
+def parse_external_resources(lines, start, end):
+    """
+    'config system external-resource' 파싱
+    Returns: dict of {name: {'name': ..., 'type': ..., 'comments': ..., 'resource': ..., 'refresh-rate': ..., 'source-ip': ...}}
+    """
+    resources = OrderedDict()
+    for sr, er in find_section_range(lines, start, end, "system external-resource"):
+        i = sr + 1
+        cur_obj = None
+        while i <= er:
+            s = lines[i].strip()
+            if s.startswith("edit "):
+                name = parse_edit_id(lines[i])
+                cur_obj = {
+                    'name': name,
+                    'status': 'enable',
+                    'type': 'address',
+                    'comments': '',
+                    'resource': '',
+                    'refresh-rate': '',
+                    'source-ip': '',
+                    'category': ''
+                }
+            elif s.startswith("set ") and cur_obj:
+                f = get_field_name(lines[i])
+                v = parse_set_value(lines[i])
+                if f in ('comment', 'comments'):
+                    cur_obj['comments'] = v
+                else:
+                    cur_obj[f] = v
+            elif s in ("next", "end"):
+                if cur_obj:
+                    resources[cur_obj['name']] = cur_obj
+                    cur_obj = None
+            i += 1
+    return resources
+
+
+def parse_vdom_inspection_mode(lines, start, end):
+    """
+    VDOM 설정의 inspection-mode (flow 또는 proxy) 파싱
+    """
+    for sr, er in find_section_range(lines, start, end, "system settings"):
+        for i in range(sr + 1, er + 1):
+            s = lines[i].strip()
+            if s.startswith("set inspection-mode"):
+                return parse_set_value(lines[i])
+    return "flow"
+
+
 # ================================================================
 #  4. 객체 리졸버 (그룹 확장 + IP/코멘트 매핑) / Object Resolver (Recursive Group & Comment Resolution)
 # ================================================================
 
 class ObjectResolver:
-    def __init__(self, addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict):
+    def __init__(self, addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=None):
         self.addrs = addr_dict
         self.addrgrps = addrgrp_dict
         self.svcs = svc_dict
         self.svcgrps = svcgrp_dict
         self.ippools = ippool_dict
+        self.ext_resources = ext_resources or {}
 
     def resolve_address(self, name, _visited=None):
         """
@@ -546,6 +635,11 @@ class ObjectResolver:
             obj = self.addrs[name]
             f_ip = format_ip_str(obj)
             return [(None, name, obj.get('type', 'ipmask'), f_ip, obj.get('comment', ''))]
+
+        if name in self.ext_resources:
+            ext = self.ext_resources[name]
+            ext_type = ext.get('type', 'external-resource')
+            return [(None, name, ext_type, ext.get('resource', ''), ext.get('comments', ''))]
 
         return [(None, name, 'unknown', '', '')]
 
@@ -630,6 +724,8 @@ def parse_firewall_policy(lines, sec_start, sec_end):
             p['dstaddr'] = []
             p['internet-service'] = ''
             p['internet-service-name'] = []
+            p['internet-service-src'] = ''
+            p['internet-service-src-name'] = []
             p['schedule'] = ''
             p['service'] = []
             p['utm-status'] = ''
@@ -652,7 +748,7 @@ def parse_firewall_policy(lines, sec_start, sec_end):
                 if s.startswith("set "):
                     f = get_field_name(lines[i])
                     if f in ('srcaddr', 'dstaddr', 'service', 'srcintf', 'dstintf',
-                             'poolname', 'internet-service-name'):
+                             'poolname', 'internet-service-name', 'internet-service-src-name'):
                         p[f] = parse_quoted_values(lines[i])
                     elif f == 'action':
                         p['action'] = parse_set_value(lines[i])
@@ -711,7 +807,7 @@ def parse_central_snat(lines, sec_start, sec_end):
             e['orig-addr'] = []
             e['dst-addr'] = []
             e['nat-ippool'] = []
-            e['nat'] = ''
+            e['nat'] = 'enable'
             e['comments'] = ''
             i += 1
             while i <= sec_end:
@@ -970,7 +1066,7 @@ def merge_row_range(ws, start_row, end_row, col, h_align=None):
                        end_row=end_row, end_column=col)
         cell = ws.cell(row=start_row, column=col)
         cur_h = h_align or (cell.alignment.horizontal if cell.alignment else 'center')
-        cell.alignment = Alignment(horizontal=cur_h, vertical='center', wrap_text=True)
+        cell.alignment = Alignment(horizontal=cur_h, vertical='top', wrap_text=True)
 
 
 def merge_group_spans(ws, p_start, expanded_list, col, h_align='left'):
@@ -1004,7 +1100,7 @@ def auto_fit(ws, min_w=6, max_w=45):
 #  7. 시트 작성 - Firewall Policy / Sheet Builder - Firewall Policy
 # ================================================================
 
-def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
+def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, profile_comments=None, vdom_inspection_mode="flow"):
     headers_with_cat = [
         ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"),
         ("ID", "base"), ("Name", "base"), ("Action", "base"),
@@ -1019,18 +1115,28 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
         # 서비스 열 (19~22) - Protocol 제외 / Service columns (19-22) - Protocol omitted
         ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
         ("Svc Port", "svc"), ("Svc Comment", "svc"),
-        # 기타 필드 열 (23~32) / Miscellaneous columns (23-32)
+        # 기타 필드 열 (23~33) / Miscellaneous columns (23-33)
         ("Schedule", "base"), ("NAT", "base"), ("IP Pool", "base"),
         ("Pool Name", "base"), ("Pool IP", "base"),
-        ("UTM Status", "base"), ("SSL/SSH Profile", "base"), ("IPS Sensor", "base"),
-        ("Log Traffic", "base"), ("Comments", "base")
+        ("Inspection Mode", "base"), ("UTM Status", "base"),
+        ("Sec Profile", "base"), ("Sec Profile Comment", "base"),
+        ("Log Traffic", "base"), ("Policy Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
 
+    vip_type_map = {}
+    if dn_ents:
+        for v in dn_ents:
+            if isinstance(v, dict) and v.get('name'):
+                vip_type_map[v['name']] = v.get('type', 'static-nat')
+
     row = 2
     seq = 0
-    for p in policies:
+    # Src Interface 기준 오름차순 안정 정렬 (동일 인터페이스 내 원래 순서 유지) / Stable sort by Src Interface
+    sorted_policies = sorted(policies, key=lambda p: ', '.join(p.get('srcintf') or []))
+
+    for p in sorted_policies:
         seq += 1
         is_dis = p.get('status', 'enable') == 'disable'
         action = p.get('action', 'deny')
@@ -1045,23 +1151,68 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
         act_fill, act_font = get_cell_style('base', seq, is_dis, is_action=True, action_val=action)
 
         src_expanded = []
-        for addr_name in (p.get('srcaddr') or ['all']):
+        for addr_name in (p.get('srcaddr') or []):
             src_expanded.extend(resolver.resolve_address(addr_name))
+        for isn in (p.get('internet-service-src-name') or []):
+            src_expanded.append((None, isn, 'internet-service', '', ''))
+        if not src_expanded:
+            src_expanded = [(None, 'all', 'ipmask', '0.0.0.0/0', '')]
 
         dst_expanded = []
-        for addr_name in (p.get('dstaddr') or ['all']):
+        for addr_name in (p.get('dstaddr') or []):
             dst_expanded.extend(resolver.resolve_address(addr_name))
+        for isn in (p.get('internet-service-name') or []):
+            dst_expanded.append((None, isn, 'internet-service', '', ''))
+        if not dst_expanded:
+            dst_expanded = [(None, 'all', 'ipmask', '0.0.0.0/0', '')]
 
         svc_expanded = []
         for svc_name in (p.get('service') or []):
             svc_expanded.extend(resolver.resolve_service(svc_name))
-        if not svc_expanded and p.get('internet-service-name'):
-            for isn in p['internet-service-name']:
-                svc_expanded.append((None, isn, 'internet-service', ''))
 
         pool_items = []
         for pn in (p.get('poolname') or []):
             pool_items.append(resolver.resolve_ippool(pn))
+
+        sec_profiles = []
+        sec_profile_comments = []
+        for pk in ['ips-sensor', 'av-profile', 'webfilter-profile', 'dnsfilter-profile',
+                   'application-list', 'file-filter-profile', 'emailfilter-profile',
+                   'dlp-profile', 'dlp-sensor', 'waf-profile', 'casb-profile',
+                   'videofilter-profile', 'sctp-filter-profile', 'cifs-profile',
+                   'virtual-patch-profile', 'voip-profile']:
+            val = p.get(pk)
+            if val:
+                sec_profiles.append(val)
+                comm = profile_comments.get(val, '') if profile_comments else ''
+                sec_profile_comments.append(comm)
+
+        ssl_prof = p.get('ssl-ssh-profile')
+        if ssl_prof:
+            sec_profiles.append(ssl_prof)
+            comm = profile_comments.get(ssl_prof, '') if profile_comments else ''
+            sec_profile_comments.append(comm)
+        elif action != 'deny':
+            sec_profiles.append('no-inspection')
+            comm = profile_comments.get('no-inspection', '') if profile_comments else ''
+            sec_profile_comments.append(comm)
+
+        sec_profile_str = '\n'.join(sec_profiles)
+        sec_profile_comment_str = '\n'.join(sec_profile_comments)
+
+        raw_insp = p.get('inspection-mode') or vdom_inspection_mode or 'flow'
+        insp_mode_display = 'Proxy-based' if raw_insp.lower() == 'proxy' else 'Flow-based'
+
+        lt = p.get('logtraffic', '')
+        lt_start = p.get('logtraffic-start', '')
+        if lt == 'disable':
+            log_traffic_str = 'disable'
+        else:
+            base_log = 'all' if lt == 'all' else 'utm'
+            logs = [base_log]
+            if lt_start == 'enable':
+                logs.append('session-start')
+            log_traffic_str = '\n'.join(logs)
 
         max_rows = max(len(src_expanded), len(dst_expanded),
                        len(svc_expanded), len(pool_items), 1)
@@ -1107,6 +1258,8 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
 
             if ri < len(dst_expanded):
                 grp, obj_name, obj_type, ip, comm = dst_expanded[ri]
+                if vip_type_map and obj_name in vip_type_map:
+                    obj_type = vip_type_map[obj_name]
                 sc(ws, cur_r, 14, grp or '', font=dg_font if grp else d_font, fill=d_fill)
                 sc(ws, cur_r, 15, obj_name, font=d_font, fill=d_fill)
                 sc(ws, cur_r, 16, obj_type, font=d_font, fill=d_fill, align=CENTER)
@@ -1127,18 +1280,20 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
                 for c in range(19, 23):
                     sc(ws, cur_r, c, None, font=v_font, fill=v_fill)
 
-            # 기타 필드 열 (23~32) / Miscellaneous columns (23-32)
+            # 기타 필드 열 (23~33) / Miscellaneous columns (23-33)
             if ri == 0:
+                utm_val = 'enable' if p.get('utm-status') == 'enable' else 'disable'
                 sc(ws, cur_r, 23, p.get('schedule', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 24, p.get('nat', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 25, p.get('ippool', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 28, p.get('utm-status', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 29, p.get('ssl-ssh-profile', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 30, p.get('ips-sensor', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 31, p.get('logtraffic', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 32, p.get('comments', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 28, insp_mode_display, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 29, utm_val, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 30, sec_profile_str, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 31, sec_profile_comment_str, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 32, log_traffic_str, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 33, p.get('comments', ''), font=b_font, fill=b_fill)
             else:
-                for c in [23, 24, 25, 28, 29, 30, 31, 32]:
+                for c in [23, 24, 25, 28, 29, 30, 31, 32, 33]:
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
             if ri < len(pool_items):
@@ -1150,7 +1305,7 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name=""):
                 sc(ws, cur_r, 27, None, font=b_font, fill=b_fill)
 
         if p_end > p_start:
-            common_cols = [1, 2, 3, 4, 5, 6, 7, 13, 23, 24, 25, 28, 29, 30, 31, 32]
+            common_cols = [1, 2, 3, 4, 5, 6, 7, 13, 23, 24, 25, 28, 29, 30, 31, 32, 33]
             for c in common_cols:
                 merge_row_range(ws, p_start, p_end, c)
             if len(pool_items) <= 1:
@@ -1340,7 +1495,8 @@ def write_central_nat_sheet(ws, entries, resolver, vdom_name=""):
                 sc(ws, cur_r, 4, e.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 5, '\n'.join(e.get('srcintf') or []), font=s_font, fill=s_fill)
                 sc(ws, cur_r, 6, '\n'.join(e.get('dstintf') or []), font=d_font, fill=d_fill)
-                sc(ws, cur_r, 20, e.get('nat', ''), font=b_font, fill=b_fill, align=CENTER)
+                nat_val = 'disable' if e.get('nat') == 'disable' else 'enable'
+                sc(ws, cur_r, 20, nat_val, font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 21, e.get('comments', ''), font=b_font, fill=b_fill)
             else:
                 for c in [1, 2, 3, 4, 20, 21]:
@@ -1607,11 +1763,48 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
     return ws
 
 
+def write_external_resource_sheet(ws, resources, vdom_name=""):
+    """
+    'External Resource' 시트 작성 / Sheet Builder - External Resource
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"), ("Name", "base"),
+        ("Type", "base"), ("Resource URL", "base"),
+        ("Refresh Rate (min)", "base"), ("Source IP", "base"),
+        ("Comments", "base")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    ncol = len(headers_with_cat)
+
+    row = 2
+    res_list = list(resources.values()) if isinstance(resources, dict) else (resources or [])
+    for seq, r in enumerate(res_list, 1):
+        is_dis = (r.get('status') == 'disable')
+        b_fill, b_font = get_cell_style('base', seq, is_dis)
+        s_fill, s_font = get_cell_style('src', seq, is_dis)
+
+        enable_val = 'N' if is_dis else 'Y'
+
+        sc(ws, row, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 3, enable_val, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 4, r.get('name', ''), font=b_font, fill=b_fill)
+        sc(ws, row, 5, r.get('type', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 6, r.get('resource', ''), font=s_font, fill=s_fill)
+        sc(ws, row, 7, r.get('refresh-rate', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 8, r.get('source-ip', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 9, r.get('comments', ''), font=b_font, fill=b_fill)
+        row += 1
+
+    auto_fit(ws)
+    return ws
+
+
 # ================================================================
 # 12. 개별 VDOM 엑셀 생성 함수 / Per-VDOM Excel Generation Function
 # ================================================================
 
-def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath):
+def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None):
     wb = Workbook()
 
     # 1. 요약 시트 / Summary Sheet
@@ -1633,6 +1826,9 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
         ("Service Groups", obj_counts[3]),
         ("IP Pools", obj_counts[4]),
     ]
+    if ext_resources:
+        items.append(("External Resources", len(ext_resources)))
+
     for idx, (label, cnt) in enumerate(items, 2):
         fill = EVEN_ROW_FILL if idx % 2 == 0 else ODD_ROW_FILL
         sc(ws_sum, idx, 1, label, font=FONT_DEFAULT_BOLD if idx == 2 else FONT_DEFAULT, fill=fill)
@@ -1641,7 +1837,8 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
 
     # 2. 방화벽 정책 시트 / Firewall Policy Sheet
     ws_fw = wb.create_sheet("Firewall Policy")
-    write_fw_policy_sheet(ws_fw, fw_pols, resolver, vdom_name)
+    write_fw_policy_sheet(ws_fw, fw_pols, resolver, vdom_name, dn_ents=dn_ents,
+                          profile_comments=profile_comments, vdom_inspection_mode=vdom_inspection_mode)
 
     # 3. 로컬 인 정책 시트 / Local-in Policy Sheet
     ws_li = wb.create_sheet("Local-in Policy")
@@ -1658,6 +1855,11 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
     # 6. DoS 정책 시트 / DoS Policy Sheet
     ws_dos = wb.create_sheet("DoS Policy")
     write_dos_sheet(ws_dos, dos_pols, resolver, vdom_name)
+
+    # 7. 외부 리소스 시트 / External Resource Sheet
+    if ext_resources:
+        ws_ext = wb.create_sheet("External Resource")
+        write_external_resource_sheet(ws_ext, ext_resources, vdom_name)
 
     wb.save(filepath)
 
@@ -2894,10 +3096,9 @@ class FortiGateGUI:
             self.entry_conf.delete(0, tk.END)
             self.entry_conf.insert(0, fpath)
 
-            if not self.entry_out.get().strip():
-                dir_path = os.path.dirname(fpath)
-                self.entry_out.delete(0, tk.END)
-                self.entry_out.insert(0, dir_path)
+            dir_path = os.path.dirname(fpath)
+            self.entry_out.delete(0, tk.END)
+            self.entry_out.insert(0, dir_path)
 
             fname = os.path.basename(fpath)
             self._set_status(f"✔ File loaded: {fname}", 0)
@@ -3016,6 +3217,9 @@ class FortiGateGUI:
             num_vdoms = len(vdom_sections)
             self._log(f"[*] {num_vdoms} VDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
 
+            all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
+            all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
+
             # 3. VDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per VDOM & Generate Individual Excel Files
             summary_list = []
             vdom_obj_counts = {}
@@ -3025,13 +3229,18 @@ class FortiGateGUI:
                 self._set_status(f"⟳ Processing ({idx}/{num_vdoms}): {vdom_name}", pct)
                 self._log(f"\n[{idx}/{num_vdoms}] Parsing VDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
 
+                vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
+                vdom_ext_res = parse_external_resources(lines, vs, ve)
+                merged_ext_res = OrderedDict(all_ext_resources)
+                merged_ext_res.update(vdom_ext_res)
+
                 addr_dict = parse_address_objects(lines, vs, ve)
                 addrgrp_dict = parse_addrgrp_objects(lines, vs, ve)
                 svc_dict = parse_service_objects(lines, vs, ve)
                 svcgrp_dict = parse_service_groups(lines, vs, ve)
                 ippool_dict = parse_ippool_objects(lines, vs, ve)
 
-                resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict)
+                resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=merged_ext_res)
                 obj_counts = [len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict)]
                 vdom_obj_counts[vdom_name] = obj_counts
 
@@ -3061,7 +3270,10 @@ class FortiGateGUI:
                 clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
                 vdom_file_path = os.path.join(target_dir, clean_vdom_filename)
                 export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
-                                                resolver, obj_counts, vdom_file_path)
+                                         resolver, obj_counts, vdom_file_path,
+                                         profile_comments=all_profile_comments,
+                                         vdom_inspection_mode=vdom_insp_mode,
+                                         ext_resources=merged_ext_res)
                 self._log(f"    -> [SUCCESS] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]})")
 
             # 4. 전체 요약 엑셀 생성 / 4. Generate Total Summary Excel
@@ -3178,11 +3390,19 @@ def run_cli(config_file=None, base_dir=None):
     vdom_sections = find_vdom_boundaries(lines)
     print(f"    {len(vdom_sections)} VDOMs: {', '.join(v[0] for v in vdom_sections)}")
 
+    all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
+    all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
+
     summary_list = []
     vdom_obj_counts = {}
 
     for vdom_name, vs, ve in vdom_sections:
         print(f"\n[*] Processing VDOM '{vdom_name}' ({vs+1}~{ve+1})...")
+
+        vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
+        vdom_ext_res = parse_external_resources(lines, vs, ve)
+        merged_ext_res = OrderedDict(all_ext_resources)
+        merged_ext_res.update(vdom_ext_res)
 
         addr_dict = parse_address_objects(lines, vs, ve)
         addrgrp_dict = parse_addrgrp_objects(lines, vs, ve)
@@ -3190,7 +3410,7 @@ def run_cli(config_file=None, base_dir=None):
         svcgrp_dict = parse_service_groups(lines, vs, ve)
         ippool_dict = parse_ippool_objects(lines, vs, ve)
 
-        resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict)
+        resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=merged_ext_res)
         obj_counts = [len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict)]
         vdom_obj_counts[vdom_name] = obj_counts
 
@@ -3220,7 +3440,10 @@ def run_cli(config_file=None, base_dir=None):
         clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
         vdom_file_path = os.path.join(target_dir, clean_vdom_filename)
         export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
-                                 resolver, obj_counts, vdom_file_path)
+                                 resolver, obj_counts, vdom_file_path,
+                                 profile_comments=all_profile_comments,
+                                 vdom_inspection_mode=vdom_insp_mode,
+                                 ext_resources=merged_ext_res)
         print(f"    -> [Saved] {clean_vdom_filename} (Policy:{counts[0]}, LocalIn:{counts[1]}, CNAT:{counts[2]}, VIP:{counts[3]}, DoS:{counts[4]})")
 
     # 전체 VDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / Generate Total Summary Excel Across All VDOMs (_TOTAL_SUMMARY.xlsx)
