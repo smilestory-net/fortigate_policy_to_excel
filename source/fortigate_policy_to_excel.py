@@ -5,8 +5,8 @@ FortiGate Configuration -> Excel Exporter & GUI (Unified Single-File Edition)
 =============================================================================
 [한국어]
 FortiGate 방화벽 설정 파일(.conf)을 분석하여:
-  1. 호스트네임 디렉토리 생성 및 각 VDOM별 엑셀 파일(<vdom_name>.xlsx) 분할 생성
-  2. 전체 VDOM 총괄 요약 파일(_TOTAL_SUMMARY.xlsx) 동시 생성
+  1. 호스트네임 디렉토리 생성 및 각 vDOM별 엑셀 파일(<vdom_name>.xlsx) 분할 생성
+  2. 전체 vDOM 총괄 요약 파일(_TOTAL_SUMMARY.xlsx) 동시 생성
   3. 객체/그룹의 실제 IP, 서브넷, 포트, 코멘트를 다중 행 전개 및 스마트 셀 세로 병합(Merge)
   4. Svc Protocol 컬럼 삭제, Svc Port 'ALL' 표기, Src/Dst/Svc Comment 분리 수록
   5. 출발지(파랑), 목적지(빨강) 가독성 컬러 스타일링 및 비활성화 정책(진한 회색) 음영 처리
@@ -14,8 +14,8 @@ FortiGate 방화벽 설정 파일(.conf)을 분석하여:
 
 [English]
 Parses FortiGate firewall backup configuration files (.conf / .txt) to:
-  1. Create a hostname-based directory with partitioned Excel files per VDOM (<vdom_name>.xlsx)
-  2. Simultaneously generate a master summary workbook (_TOTAL_SUMMARY.xlsx) across all VDOMs
+  1. Create a hostname-based directory with partitioned Excel files per vDOM (<vdom_name>.xlsx)
+  2. Simultaneously generate a master summary workbook (_TOTAL_SUMMARY.xlsx) across all vDOMs
   3. Recursively resolve objects/groups to actual IPs/ports/comments with multi-row flattening & cell merging
   4. Optimize service ports ('ALL') and provide dedicated Src/Dst/Svc Comment columns
   5. Apply professional visual styling (Src blue, Dst red, zebra striping, disabled policy shading)
@@ -184,7 +184,7 @@ def parse_hostname(lines, default_name="FortiGate"):
 
 
 # ================================================================
-#  2. VDOM 경계 파싱 / VDOM Boundary Parsing
+#  2. vDOM 경계 파싱 / vDOM Boundary Parsing
 # ================================================================
 
 def find_vdom_boundaries(lines):
@@ -581,7 +581,7 @@ def parse_external_resources(lines, start, end):
 
 def parse_vdom_inspection_mode(lines, start, end):
     """
-    VDOM 설정의 inspection-mode (flow 또는 proxy) 파싱
+    vDOM 설정의 inspection-mode (flow 또는 proxy) 파싱
     """
     for sr, er in find_section_range(lines, start, end, "system settings"):
         for i in range(sr + 1, er + 1):
@@ -984,7 +984,7 @@ FONT_DIS          = Font(name="맑은 고딕", size=9, color="495057")
 FONT_DIS_SRC      = Font(name="맑은 고딕", size=9, color="1B365D")
 FONT_DIS_DST      = Font(name="맑은 고딕", size=9, color="6B1D1D")
 
-# Action 및 VDOM 폰트 / Action (Accept / Deny) & VDOM Fonts
+# Action 및 vDOM 폰트 / Action (Accept / Deny) & vDOM Fonts
 ACCEPT_FONT      = Font(name="맑은 고딕", size=9, color="008000", bold=True)
 DENY_FONT        = Font(name="맑은 고딕", size=9, color="C00000", bold=True)
 SUBHDR_FILL      = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
@@ -1096,13 +1096,34 @@ def auto_fit(ws, min_w=6, max_w=45):
         ws.column_dimensions[cl].width = min(max(mx + 2, min_w), max_w)
 
 
+TAB_COLOR_EMPTY = "FFFF0000"  # 빈 시트 빨간색 탭 색상 (Solid Red ARGB) / Red Tab Color for Empty Sheets
+
+
+def check_and_mark_empty_sheet_tabs(wb, empty_tab_color=TAB_COLOR_EMPTY):
+    """
+    [한국어] 컬럼 헤더(1행) 외에 데이터 내용이 전혀 없는 빈 시트의 탭 색상을 빨간색으로 표시
+    [English] Mark sheet tab color as red for sheets that have no data content beyond the header row
+    """
+    for ws in wb.worksheets:
+        if ws.title in ("Summary", "vDOM Total Summary"):
+            continue
+        has_data = False
+        if ws.max_row > 1:
+            for r in range(2, ws.max_row + 1):
+                if any(ws.cell(row=r, column=c).value is not None for c in range(1, ws.max_column + 1)):
+                    has_data = True
+                    break
+        if not has_data:
+            ws.sheet_properties.tabColor = empty_tab_color
+
+
 # ================================================================
 #  7. 시트 작성 - Firewall Policy / Sheet Builder - Firewall Policy
 # ================================================================
 
 def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, profile_comments=None, vdom_inspection_mode="flow"):
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"),
         ("ID", "base"), ("Name", "base"), ("Action", "base"),
         # 출발지 열 (7~12) / Source columns (7-12)
         ("Src Interface", "src"), ("Src Group OBJ", "src"),
@@ -1328,7 +1349,7 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
 
 def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"),
         ("ID", "base"), ("Interface", "base"),
         # 출발지 열 (6~10) / Source columns (6-10)
         ("Src Group OBJ", "src"), ("Src OBJ Name", "src"),
@@ -1445,7 +1466,7 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
 
 def write_central_nat_sheet(ws, entries, resolver, vdom_name=""):
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"), ("ID", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"), ("ID", "base"),
         ("Src Interface", "src"), ("Dst Interface", "dst"),
         # 원래 출발지 열 (7~11) / Original Source columns (7-11)
         ("Orig Group OBJ", "src"), ("Orig OBJ Name", "src"),
@@ -1561,7 +1582,7 @@ def write_central_nat_sheet(ws, entries, resolver, vdom_name=""):
 
 def write_dnat_sheet(ws, entries, vdom_name=""):
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Name", "base"), ("Type", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Name", "base"), ("Type", "base"),
         ("External IP", "src"), ("Mapped IP", "dst"), ("External Interface", "src"),
         ("Port Forward", "base"), ("Protocol", "base"),
         ("External Port", "src"), ("Mapped Port", "dst"),
@@ -1637,7 +1658,7 @@ def write_dnat_sheet(ws, entries, vdom_name=""):
 
 def write_dos_sheet(ws, policies, resolver, vdom_name=""):
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"),
         ("ID", "base"), ("Interface", "base"),
         # 출발지 열 (6~10) / Source columns (6-10)
         ("Src Group OBJ", "src"), ("Src OBJ Name", "src"),
@@ -1768,7 +1789,7 @@ def write_external_resource_sheet(ws, resources, vdom_name=""):
     'External Resource' 시트 작성 / Sheet Builder - External Resource
     """
     headers_with_cat = [
-        ("Seq", "base"), ("VDOM", "base"), ("Enable", "base"), ("Name", "base"),
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"), ("Name", "base"),
         ("Type", "base"), ("Resource URL", "base"),
         ("Refresh Rate (min)", "base"), ("Source IP", "base"),
         ("Comments", "base")
@@ -1801,7 +1822,7 @@ def write_external_resource_sheet(ws, resources, vdom_name=""):
 
 
 # ================================================================
-# 12. 개별 VDOM 엑셀 생성 함수 / Per-VDOM Excel Generation Function
+# 12. 개별 vDOM 엑셀 생성 함수 / Per-vDOM Excel Generation Function
 # ================================================================
 
 def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None):
@@ -1814,20 +1835,19 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
     sc(ws_sum, 1, 2, "Count", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
 
     items = [
-        ("VDOM Name", vdom_name),
+        ("vDOM Name", vdom_name),
         ("Firewall Policy", len(fw_pols)),
         ("Local-in Policy", len(li_pols)),
         ("Central-NAT", len(cn_ents)),
         ("DNAT (VIP)", len(dn_ents)),
         ("DoS Policy", len(dos_pols)),
+        ("External Resources", len(ext_resources) if ext_resources else 0),
         ("Address Objects", obj_counts[0]),
         ("Address Groups", obj_counts[1]),
         ("Service Objects", obj_counts[2]),
         ("Service Groups", obj_counts[3]),
         ("IP Pools", obj_counts[4]),
     ]
-    if ext_resources:
-        items.append(("External Resources", len(ext_resources)))
 
     for idx, (label, cnt) in enumerate(items, 2):
         fill = EVEN_ROW_FILL if idx % 2 == 0 else ODD_ROW_FILL
@@ -1857,9 +1877,11 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
     write_dos_sheet(ws_dos, dos_pols, resolver, vdom_name)
 
     # 7. 외부 리소스 시트 / External Resource Sheet
-    if ext_resources:
-        ws_ext = wb.create_sheet("External Resource")
-        write_external_resource_sheet(ws_ext, ext_resources, vdom_name)
+    ws_ext = wb.create_sheet("External Resource")
+    write_external_resource_sheet(ws_ext, ext_resources or {}, vdom_name)
+
+    # 8. 내용 없는 빈 시트 탭 색상 빨간색으로 지정 / Highlight empty sheet tabs with red
+    check_and_mark_empty_sheet_tabs(wb, TAB_COLOR_EMPTY)
 
     wb.save(filepath)
 
@@ -1888,7 +1910,7 @@ C_BTN_SECONDARY = "#3a3d41"   # 보조 버튼 (다크 그레이) / Secondary But
 C_BTN_SECONDARY_HOVER = "#45494e"
 C_BTN_DISABLED = "#2d2d2d"    # 비활성화 버튼 / Disabled Button
 C_BTN_DISABLED_FG = "#555555"
-C_TAG_VDOM = "#dcdcaa"        # VDOM 로그 태그 (노란색) / VDOM Tag (Yellow)
+C_TAG_vDOM = "#dcdcaa"        # vDOM 로그 태그 (노란색) / vDOM Tag (Yellow)
 C_TAG_INFO = "#569cd6"        # 안내 정보 태그 (파란색) / Info Tag (Blue)
 C_TAG_SUCCESS = "#4ec9b0"     # 완료/성공 태그 (민트색) / Success Tag (Mint)
 C_TAG_ERROR = "#f14c4c"       # 에러 태그 (빨간색) / Error Tag (Red)
@@ -2491,7 +2513,7 @@ def get_fortinet_icon_path():
     """
     try:
         temp_dir = tempfile.gettempdir()
-        target_path = os.path.join(temp_dir, "_fortinet_embedded_v1.ico")
+        target_path = os.path.join(temp_dir, "fortinet.ico")
         if not os.path.exists(target_path) or os.path.getsize(target_path) != 10864:
             raw_data = base64.b64decode(FORTINET_ICO_BASE64.strip())
             with open(target_path, "wb") as f_out:
@@ -2504,7 +2526,7 @@ def get_fortinet_icon_path():
 class FortiGateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FortiGate Policy to Excel Exporter  v1.2")
+        self.root.title("FortiGate Policy to Excel Exporter  v1.3")
         self.root.minsize(860, 480)
         self.root.configure(bg=C_BG_APP)
 
@@ -2926,7 +2948,7 @@ class FortiGateGUI:
                 pady=8
             )
             txt.tag_config('info', foreground=C_TAG_INFO)
-            txt.tag_config('vdom', foreground=C_TAG_VDOM, font=('Consolas', 10, 'bold'))
+            txt.tag_config('vdom', foreground=C_TAG_vDOM, font=('Consolas', 10, 'bold'))
             txt.tag_config('success', foreground=C_TAG_SUCCESS, font=('Consolas', 10, 'bold'))
             txt.tag_config('error', foreground=C_TAG_ERROR, font=('Consolas', 10, 'bold'))
             txt.tag_config('comment', foreground=C_TAG_COMMENT)
@@ -3026,7 +3048,7 @@ class FortiGateGUI:
 
         # DEBUG CONSOLE 탭 초기 메시지 / Initial DEBUG CONSOLE Tab Message
         self.debug_text.insert(tk.END, "[Debug Console : Policy Parser Diagnostics]\n", 'info')
-        self.debug_text.insert(tk.END, "Ready to capture VDOM breakdown, policy counts, and object mapping metrics.\n", 'muted')
+        self.debug_text.insert(tk.END, "Ready to capture vDOM breakdown, policy counts, and object mapping metrics.\n", 'muted')
 
         # TERMINAL 환경 및 진단 정보 / TERMINAL Environment & Diagnostics Information
         import platform
@@ -3055,7 +3077,7 @@ class FortiGateGUI:
             f"[Features Active]\n"
             f"  ✔ Recursive Address / Service Group Resolution\n"
             f"  ✔ 32-Column Firewall Policy Multi-row Flattening\n"
-            f"  ✔ Individual VDOM Workbooks + TOTAL_SUMMARY.xlsx\n"
+            f"  ✔ Individual vDOM Workbooks + TOTAL_SUMMARY.xlsx\n"
         )
         self.terminal_text.insert(tk.END, term_info, 'muted')
 
@@ -3133,7 +3155,7 @@ class FortiGateGUI:
             stripped = text.strip()
             if stripped.startswith("[*]"):
                 self.log_text.insert(tk.END, line, 'info')
-            elif stripped.startswith("[") and ("VDOM" in stripped or "/" in stripped[:6]):
+            elif stripped.startswith("[") and ("vDOM" in stripped or "/" in stripped[:6]):
                 self.log_text.insert(tk.END, line, 'vdom')
             elif "[SUCCESS]" in stripped or "[SUMMARY COMPLETE]" in stripped or "[생성 완료]" in stripped or "[성공]" in stripped or "[총괄 요약 완료]" in stripped:
                 self.log_text.insert(tk.END, line, 'success')
@@ -3211,23 +3233,23 @@ class FortiGateGUI:
             self._log(f"[*] Hostname: {hostname}")
             self._log(f"[*] Target Directory: {target_dir}")
 
-            # 2. VDOM 경계 분석 / 2. Analyze VDOM Boundaries
-            self._set_status("⟳ Analyzing VDOM boundaries...", 10)
+            # 2. vDOM 경계 분석 / 2. Analyze vDOM Boundaries
+            self._set_status("⟳ Analyzing vDOM boundaries...", 10)
             vdom_sections = find_vdom_boundaries(lines)
             num_vdoms = len(vdom_sections)
-            self._log(f"[*] {num_vdoms} VDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
+            self._log(f"[*] {num_vdoms} vDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
 
             all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
             all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
 
-            # 3. VDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per VDOM & Generate Individual Excel Files
+            # 3. vDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per vDOM & Generate Individual Excel Files
             summary_list = []
             vdom_obj_counts = {}
 
             for idx, (vdom_name, vs, ve) in enumerate(vdom_sections, 1):
                 pct = 10 + int((idx / num_vdoms) * 80)
                 self._set_status(f"⟳ Processing ({idx}/{num_vdoms}): {vdom_name}", pct)
-                self._log(f"\n[{idx}/{num_vdoms}] Parsing VDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
+                self._log(f"\n[{idx}/{num_vdoms}] Parsing vDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
 
                 vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
                 vdom_ext_res = parse_external_resources(lines, vs, ve)
@@ -3281,8 +3303,8 @@ class FortiGateGUI:
             total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
             wb_tot = Workbook()
             ws_tot = wb_tot.active
-            ws_tot.title = "VDOM Total Summary"
-            tot_headers = ["VDOM", "Firewall Policy", "Local-in Policy",
+            ws_tot.title = "vDOM Total Summary"
+            tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
                            "Central-NAT", "DNAT (VIP)", "DoS Policy",
                            "Address Objects", "Addr Groups",
                            "Service Objects", "Svc Groups", "IP Pools"]
@@ -3313,7 +3335,7 @@ class FortiGateGUI:
             self._log(f"\n[*] [SUMMARY COMPLETE] _TOTAL_SUMMARY.xlsx")
 
             self._set_status("✔ All Excel workbooks generated successfully", 100)
-            self._log(f"\n[SUCCESS] Total {num_vdoms} VDOM Excel files exported to '{target_dir}'.")
+            self._log(f"\n[SUCCESS] Total {num_vdoms} vDOM Excel files exported to '{target_dir}'.")
 
             self.root.after(0, self._on_success)
 
@@ -3386,9 +3408,9 @@ def run_cli(config_file=None, base_dir=None):
     print(f"[*] Hostname: {hostname}")
     print(f"[*] Output Directory: {target_dir}")
 
-    print("[*] VDOM parsing...")
+    print("[*] vDOM parsing...")
     vdom_sections = find_vdom_boundaries(lines)
-    print(f"    {len(vdom_sections)} VDOMs: {', '.join(v[0] for v in vdom_sections)}")
+    print(f"    {len(vdom_sections)} vDOMs: {', '.join(v[0] for v in vdom_sections)}")
 
     all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
     all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
@@ -3397,7 +3419,7 @@ def run_cli(config_file=None, base_dir=None):
     vdom_obj_counts = {}
 
     for vdom_name, vs, ve in vdom_sections:
-        print(f"\n[*] Processing VDOM '{vdom_name}' ({vs+1}~{ve+1})...")
+        print(f"\n[*] Processing vDOM '{vdom_name}' ({vs+1}~{ve+1})...")
 
         vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
         vdom_ext_res = parse_external_resources(lines, vs, ve)
@@ -3446,12 +3468,12 @@ def run_cli(config_file=None, base_dir=None):
                                  ext_resources=merged_ext_res)
         print(f"    -> [Saved] {clean_vdom_filename} (Policy:{counts[0]}, LocalIn:{counts[1]}, CNAT:{counts[2]}, VIP:{counts[3]}, DoS:{counts[4]})")
 
-    # 전체 VDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / Generate Total Summary Excel Across All VDOMs (_TOTAL_SUMMARY.xlsx)
+    # 전체 vDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / Generate Total Summary Excel Across All vDOMs (_TOTAL_SUMMARY.xlsx)
     total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
     wb_tot = Workbook()
     ws_tot = wb_tot.active
-    ws_tot.title = "VDOM Total Summary"
-    tot_headers = ["VDOM", "Firewall Policy", "Local-in Policy",
+    ws_tot.title = "vDOM Total Summary"
+    tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
                    "Central-NAT", "DNAT (VIP)", "DoS Policy",
                    "Address Objects", "Addr Groups",
                    "Service Objects", "Svc Groups", "IP Pools"]
@@ -3482,10 +3504,10 @@ def run_cli(config_file=None, base_dir=None):
     print(f"\n[OK] Total Summary Saved: {total_summary_path}")
 
     print("\n" + "=" * 80)
-    print(f"  FortiGate [{hostname}] VDOM Export Summary")
+    print(f"  FortiGate [{hostname}] vDOM Export Summary")
     print("=" * 80)
     fmt = "  {:<20} {:>8} {:>8} {:>8} {:>8} {:>8}  | {:>5} {:>5} {:>5} {:>5} {:>5}"
-    print(fmt.format("VDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS",
+    print(fmt.format("vDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS",
                       "Addr", "AGrp", "Svc", "SGrp", "Pool"))
     print("-" * 80)
     totals = [0] * 10
@@ -3498,7 +3520,7 @@ def run_cli(config_file=None, base_dir=None):
     print("-" * 80)
     print(fmt.format("Total", *totals))
     print("=" * 80)
-    print(f"\n[Finished] All {len(vdom_sections)} VDOM Excel files created in directory: '{target_dir}'")
+    print(f"\n[Finished] All {len(vdom_sections)} vDOM Excel files created in directory: '{target_dir}'")
 
 
 def main():
@@ -3506,7 +3528,7 @@ def main():
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
         run_gui()
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
-        print("FortiGate Policy to Excel Exporter v1.2")
+        print("FortiGate Policy to Excel Exporter v1.3")
         print("Usage:")
         print("  GUI Mode : python fortigate_policy_to_excel.py [--gui]")
         print("  CLI Mode : python fortigate_policy_to_excel.py <config_file> [output_dir]")
