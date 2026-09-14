@@ -2504,7 +2504,7 @@ def get_fortinet_icon_path():
 class FortiGateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FortiGate Policy to Excel Exporter  v1.1")
+        self.root.title("FortiGate Policy to Excel Exporter  v1.2")
         self.root.minsize(860, 480)
         self.root.configure(bg=C_BG_APP)
 
