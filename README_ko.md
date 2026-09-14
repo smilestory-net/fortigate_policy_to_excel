@@ -178,7 +178,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 30: Sec Profile        - 적용된 모든 보안 프로파일 목록 (SSL/SSH, IPS, AV, WebFilter 등 줄바꿈 통합)
   Col 31: Sec Profile Comment- 각 보안 프로파일 설정의 코멘트 (1:1 매핑 줄바꿈)
   Col 32: Log Traffic        - 트래픽 로깅 (all / utm / disable 및 session-start 결합 표기)
-  Col 33: Policy Comment     - 정책 자체 코멘트
+  Col 33: Comment            - 정책 자체 코멘트
 ```
 
 ### 2. Local-in Policy 시트 컬럼 구성 (22개 열)
@@ -214,7 +214,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 
 [기타]
   Col 21: Schedule           - 스케줄
-  Col 22: Comments           - 정책 코멘트
+  Col 22: Comment            - 정책 코멘트
 ```
 
 ### 3. Central-NAT 시트 컬럼 구성 (21개 열)
@@ -247,7 +247,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 18: NAT Pool IP        - 실제 변환될 NAT Pool IP 대역
   Col 19: NAT Pool Type      - IP Pool 타입 (overload, one-to-one 등)
   Col 20: NAT                - NAT 활성화 여부 (enable / disable)
-  Col 21: Comments           - NAT 규칙 코멘트
+  Col 21: Comment            - NAT 규칙 코멘트
 ```
 
 ### 4. DNAT (VIP) 시트 컬럼 구성 (18개 열)
@@ -312,16 +312,16 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 18: Svc Port           - 서비스 포트
   Col 19: Svc Comment        - 서비스 객체 코멘트
 
-[정책 코멘트]
-  Col 20: Comments           - DoS 정책 코멘트
-
 [비정상 트래픽 탐지 (Anomaly Detection)]
-  Col 21: Anomaly Name       - 공격 유형 / 비정상 트래픽 명칭 (예: tcp_syn_flood 등)
-  Col 22: Anomaly Status     - 아노말리 방어 활성화 상태 (enable / disable)
-  Col 23: Anomaly Log        - 차단 로그 기록 여부 (enable / disable)
-  Col 24: Anomaly Quarant    - 격리 설정 (attacker / disable)
-  Col 25: Anomaly Action     - 조치 방식 (pass / block / disable)
-  Col 26: Anomaly Threshold  - 임계값 (Threshold 패킷/초)
+  Col 20: Anomaly Name       - 공격 유형 / 비정상 트래픽 명칭 (예: tcp_syn_flood 등)
+  Col 21: Anomaly Status     - 아노말리 방어 활성화 상태 (enable / disable)
+  Col 22: Anomaly Log        - 차단 로그 기록 여부 (enable / disable)
+  Col 23: Anomaly Quarant    - 격리 설정 (attacker / disable)
+  Col 24: Anomaly Action     - 조치 방식 (pass / block / disable)
+  Col 25: Anomaly Threshold  - 임계값 (Threshold 패킷/초)
+
+[정책 코멘트]
+  Col 26: Comment            - DoS 정책 코멘트
 ```
 
 ### 6. External Resource 시트 컬럼 구성 (9개 열)
@@ -335,7 +335,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 6: Resource URL        - 외부 피드 다운로드 URL
   Col 7: Refresh Rate (min)  - 자동 갱신 주기 (분 단위)
   Col 8: Source IP           - 외부 접속 시 사용할 출발지 IP
-  Col 9: Comments            - 리소스 코멘트
+  Col 9: Comment             - 리소스 코멘트
 ```
 
 ---
