@@ -64,6 +64,7 @@ A tool that parses FortiGate firewall backup configuration files (`.conf`) and a
   * Service section: Blue-gray header
 * **Zebra Striping**: Alternating row shading across all columns ensures smooth visual scanning.
 * **Disabled Policy Shading**: Disabled policies (`Enable == N`) are highlighted with a dark gray background, making them instantly distinguishable from active rules.
+* **Red Tab Highlighting for Empty Sheets**: Worksheets that contain no policy data (i.e. only column headers in row 1) automatically have their sheet tab color set to **Red (`FFFF0000`)**, allowing engineers and auditors to spot unconfigured policy categories at a glance.
 
 ### 8. Hostname Directory Creation & Per-VDOM Excel Splitting
 * Prevents performance lag and freezing typically caused by dumping large-scale configuration policies into a single spreadsheet.
@@ -281,7 +282,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 18: Comment            - VIP object comment
 ```
 
-### 5. DoS Policy Sheet Column Structure (25 Columns)
+### 5. DoS Policy Sheet Column Structure (26 Columns)
 
 ```
 [Policy Basic Information]
@@ -317,9 +318,10 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 [Anomaly Detection]
   Col 21: Anomaly Name       - Attack / anomaly pattern name (e.g., tcp_syn_flood)
   Col 22: Anomaly Status     - Anomaly defense status (enable / disable)
-  Col 23: Anomaly Log        - Logging status
-  Col 24: Anomaly Action     - Mitigation action (pass / block)
-  Col 25: Anomaly Threshold  - Trigger threshold (packets/second)
+  Col 23: Anomaly Log        - Logging status (enable / disable)
+  Col 24: Anomaly Quarant    - Quarantine action (attacker / disable)
+  Col 25: Anomaly Action     - Mitigation action (pass / block / disable)
+  Col 26: Anomaly Threshold  - Trigger threshold (packets/second)
 ```
 
 ### 6. External Resource Sheet Column Structure (9 Columns)
