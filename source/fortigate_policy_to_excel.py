@@ -3,7 +3,6 @@
 """
 FortiGate Configuration -> Excel Exporter & GUI (Unified Single-File Edition)
 =============================================================================
-[한국어]
 FortiGate 방화벽 설정 파일(.conf)을 분석하여:
   1. 호스트네임 디렉토리 생성 및 각 vDOM별 엑셀 파일(<vdom_name>.xlsx) 분할 생성
   2. 전체 vDOM 총괄 요약 파일(_TOTAL_SUMMARY.xlsx) 동시 생성
@@ -12,7 +11,7 @@ FortiGate 방화벽 설정 파일(.conf)을 분석하여:
   5. 출발지(파랑), 목적지(빨강) 가독성 컬러 스타일링 및 비활성화 정책(진한 회색) 음영 처리
   6. 모던 다크 테마 GUI 및 커맨드라인(CLI) 모드 완벽 통합 지원
 
-[English]
+
 Parses FortiGate firewall backup configuration files (.conf / .txt) to:
   1. Create a hostname-based directory with partitioned Excel files per vDOM (<vdom_name>.xlsx)
   2. Simultaneously generate a master summary workbook (_TOTAL_SUMMARY.xlsx) across all vDOMs
@@ -127,13 +126,13 @@ def format_subnet(ip, mask):
 
 def format_ip_str(obj):
     """
-    [한국어] 객체 타입별 IP 문자열 단일 포맷팅:
+    객체 타입별 IP 문자열 단일 포맷팅:
       - 단일 호스트: 192.168.1.1/32
       - 네트워크 서브넷 대역: 192.168.10.0/24, 0.0.0.0/0 등
       - IP 범위 (Range): 1.1.1.1-1.1.1.10
       - FQDN, 지리(국가), 동적 객체 등
 
-    [English] Unify IP display format based on object type:
+    Unify IP display format based on object type:
       - Single host: 192.168.1.1/32
       - Subnet network: 192.168.10.0/24, 0.0.0.0/0, etc.
       - IP Range: 1.1.1.1-1.1.1.10
@@ -503,6 +502,182 @@ def parse_ippool_objects(lines, vdom_start, vdom_end):
     return pools
 
 
+def format_schedule_time(obj):
+    """
+    스케줄 객체(recurring / onetime)의 실제 시간 문자열 포맷팅
+    Format actual schedule time string for recurring or onetime schedules
+    """
+    if not obj:
+        return ""
+    stype = obj.get('type', '')
+    if stype == 'recurring':
+        days = obj.get('day', [])
+        start = obj.get('start', '')
+        end = obj.get('end', '')
+
+        day_map = {
+            'sunday': 'Sun', 'monday': 'Mon', 'tuesday': 'Tue',
+            'wednesday': 'Wed', 'thursday': 'Thu', 'friday': 'Fri', 'saturday': 'Sat',
+            'none': 'None'
+        }
+        all_7_days = {'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'}
+        day_set = set(d.lower() for d in days)
+
+        if day_set >= all_7_days:
+            day_str = "매일 (Sun-Sat)"
+        elif days:
+            day_str = ', '.join(day_map.get(d.lower(), d) for d in days)
+        else:
+            day_str = "매일 (Sun-Sat)"
+
+        has_time = False
+        time_str = ""
+        if start or end:
+            s_val = start if start else "00:00"
+            e_val = end if end else "00:00"
+            if not (s_val == "00:00" and e_val == "00:00"):
+                time_str = f"{s_val}-{e_val}"
+                has_time = True
+
+        if has_time:
+            return f"{day_str} {time_str}"
+        else:
+            if day_set >= all_7_days:
+                return "Always"
+            return f"{day_str} (All Day)"
+
+    elif stype == 'onetime':
+        start_raw = obj.get('start', '')
+        end_raw = obj.get('end', '')
+
+        def _fmt_dt(dt_str):
+            if not dt_str:
+                return ""
+            parts = dt_str.strip().split()
+            if len(parts) == 2:
+                # time date -> date time (e.g., '00:00 2026/07/16' -> '2026/07/16 00:00')
+                if '/' in parts[1] or '-' in parts[1]:
+                    return f"{parts[1]} {parts[0]}"
+            return dt_str
+
+        s_fmt = _fmt_dt(start_raw)
+        e_fmt = _fmt_dt(end_raw)
+        if s_fmt and e_fmt:
+            return f"{s_fmt} ~ {e_fmt}"
+        elif s_fmt:
+            return f"{s_fmt} ~"
+        elif e_fmt:
+            return f"~ {e_fmt}"
+        return ""
+
+    return ""
+
+
+def parse_schedule_recurring(lines, vdom_start, vdom_end):
+    """config firewall schedule recurring -> dict[name] = {'type': 'recurring', 'day': [...], 'start': '...', 'end': '...', 'comment': '...'}"""
+    scheds = {}
+    builtin = {
+        'always': {
+            'type': 'recurring',
+            'day': ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+            'start': '', 'end': '', 'comment': 'Always active'
+        },
+        'none': {
+            'type': 'recurring',
+            'day': ['none'],
+            'start': '', 'end': '', 'comment': 'Never active'
+        }
+    }
+    scheds.update(builtin)
+
+    ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule recurring")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                obj = {'type': 'recurring', 'day': [], 'start': '', 'end': '', 'comment': ''}
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        v = parse_set_value(lines[i])
+                        if f == 'day':
+                            obj['day'] = v.split()
+                        elif f == 'start':
+                            obj['start'] = v
+                        elif f == 'end':
+                            obj['end'] = v
+                        elif f in ('comment', 'comments'):
+                            obj['comment'] = v
+                    i += 1
+                scheds[name] = obj
+            i += 1
+    return scheds
+
+
+def parse_schedule_onetime(lines, vdom_start, vdom_end):
+    """config firewall schedule onetime -> dict[name] = {'type': 'onetime', 'start': '...', 'end': '...', 'comment': '...'}"""
+    scheds = {}
+    ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule onetime")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                obj = {'type': 'onetime', 'start': '', 'end': '', 'expiration-days': '', 'comment': ''}
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        v = parse_set_value(lines[i])
+                        if f == 'start':
+                            obj['start'] = v
+                        elif f == 'end':
+                            obj['end'] = v
+                        elif f == 'expiration-days':
+                            obj['expiration-days'] = v
+                        elif f in ('comment', 'comments'):
+                            obj['comment'] = v
+                    i += 1
+                scheds[name] = obj
+            i += 1
+    return scheds
+
+
+def parse_schedule_group(lines, vdom_start, vdom_end):
+    """config firewall schedule group -> dict[name] = {'type': 'group', 'members': [...], 'comment': '...'}"""
+    groups = {}
+    ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule group")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                obj = {'type': 'group', 'members': [], 'comment': ''}
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        if f == 'member':
+                            obj['members'] = parse_quoted_values(lines[i])
+                        elif f in ('comment', 'comments'):
+                            obj['comment'] = parse_set_value(lines[i])
+                    i += 1
+                groups[name] = obj
+            i += 1
+    return groups
+
+
 def parse_security_profile_comments(lines, start, end):
     """
     FortiGate 보안 프로파일들의 코멘트 수집
@@ -596,18 +771,22 @@ def parse_vdom_inspection_mode(lines, start, end):
 # ================================================================
 
 class ObjectResolver:
-    def __init__(self, addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=None):
+    def __init__(self, addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=None,
+                 sched_recurring_dict=None, sched_onetime_dict=None, sched_group_dict=None):
         self.addrs = addr_dict
         self.addrgrps = addrgrp_dict
         self.svcs = svc_dict
         self.svcgrps = svcgrp_dict
         self.ippools = ippool_dict
         self.ext_resources = ext_resources or {}
+        self.sched_recurring = sched_recurring_dict or {}
+        self.sched_onetime = sched_onetime_dict or {}
+        self.sched_groups = sched_group_dict or {}
 
     def resolve_address(self, name, _visited=None):
         """
-        [한국어] 주소 객체 또는 그룹을 재귀적으로 확장하여 멤버별 세부 정보 반환
-        [English] Recursively resolve address object or group into individual member entries
+        주소 객체 또는 그룹을 재귀적으로 확장하여 멤버별 세부 정보 반환
+        Recursively resolve address object or group into individual member entries
         Returns: list of (group_name, obj_name, obj_type, formatted_ip, comment)
         """
         if _visited is None:
@@ -645,8 +824,8 @@ class ObjectResolver:
 
     def resolve_service(self, name, _visited=None):
         """
-        [한국어] 서비스 객체 또는 그룹을 재귀적으로 확장하여 포트 및 코멘트 정보 반환
-        [English] Recursively resolve service object or group into individual service/port entries
+        서비스 객체 또는 그룹을 재귀적으로 확장하여 포트 및 코멘트 정보 반환
+        Recursively resolve service object or group into individual service/port entries
         Returns: list of (group_name, svc_name, port_display, comment)
         """
         if _visited is None:
@@ -702,6 +881,54 @@ class ObjectResolver:
             obj = self.ippools[name]
             return (name, obj.get('display', ''), obj.get('type', ''))
         return (name, '', '')
+
+    def resolve_schedule(self, name, _visited=None):
+        """
+        스케줄 객체 또는 그룹을 재귀적으로 확장하여 멤버별 세부 시간 정보 반환
+        Recursively resolve schedule object or group into individual member schedule entries
+        Returns: list of (group_name, obj_name, sched_type, time_display, comment)
+        """
+        if not name:
+            return [(None, 'always', 'recurring', 'Always', '')]
+
+        if _visited is None:
+            _visited = set()
+        if name in _visited:
+            return [(None, name, 'ref-loop', '', '')]
+        _visited.add(name)
+
+        if name in self.sched_groups:
+            result = []
+            grp_data = self.sched_groups[name]
+            members = grp_data['members'] if isinstance(grp_data, dict) else []
+            grp_comment = grp_data.get('comment', '') if isinstance(grp_data, dict) else ''
+
+            for m in members:
+                sub = self.resolve_schedule(m, _visited.copy())
+                for item in sub:
+                    c = item[4] or grp_comment
+                    result.append((name, item[1], item[2], item[3], c))
+            if not result:
+                result.append((name, '(empty)', 'group(empty)', '', grp_comment))
+            return result
+
+        if name in self.sched_recurring:
+            obj = self.sched_recurring[name]
+            time_disp = format_schedule_time(obj)
+            return [(None, name, 'recurring', time_disp, obj.get('comment', ''))]
+
+        if name in self.sched_onetime:
+            obj = self.sched_onetime[name]
+            time_disp = format_schedule_time(obj)
+            return [(None, name, 'onetime', time_disp, obj.get('comment', ''))]
+
+        if name.lower() == 'always':
+            return [(None, 'always', 'recurring', 'Always', '')]
+        elif name.lower() == 'none':
+            return [(None, 'none', 'recurring', 'None', '')]
+
+        return [(None, name, 'unknown', '', '')]
+
 
 
 # ================================================================
@@ -924,9 +1151,16 @@ def parse_dos_policy(lines, sec_start, sec_end):
                         if anomaly:
                             p['anomalies'].append(anomaly)
                         anomaly = {'name': parse_edit_id(lines[i]),
-                                   'status': '', 'log': '', 'action': '', 'threshold': ''}
+                                   'status': 'disable', 'log': 'disable',
+                                   'action': 'disable', 'quarantine': 'disable',
+                                   'threshold': ''}
                     elif s.startswith("set ") and anomaly:
-                        anomaly[get_field_name(lines[i])] = parse_set_value(lines[i])
+                        f_name = get_field_name(lines[i])
+                        f_val = parse_set_value(lines[i])
+                        if f_name == 'quarantine':
+                            anomaly['quarantine'] = 'attacker' if f_val.lower() == 'attacker' else 'disable'
+                        else:
+                            anomaly[f_name] = f_val
                     elif s == "next":
                         if anomaly:
                             p['anomalies'].append(anomaly)
@@ -960,6 +1194,7 @@ HDR_DEFAULT_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_ty
 HDR_SRC_FILL     = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # 진한 파랑 (출발지) / Deep Blue (Source)
 HDR_DST_FILL     = PatternFill(start_color="843C39", end_color="843C39", fill_type="solid") # 진한 빨강 (목적지) / Deep Red (Destination)
 HDR_SVC_FILL     = PatternFill(start_color="415A77", end_color="415A77", fill_type="solid") # 블루그레이 (서비스) / Blue-Gray (Service)
+HDR_SCHED_FILL   = PatternFill(start_color="2A5C5A", end_color="2A5C5A", fill_type="solid") # 딥 틸 (스케줄) / Deep Teal (Schedule)
 HDR_FONT         = Font(name="맑은 고딕", size=10, bold=True, color="FFFFFF")
 
 # --- 데이터 행 배경색 (행 전체 열에 일괄 적용) / Data Row Fills (Zebra Striping across all columns) ---
@@ -979,10 +1214,15 @@ FONT_SRC_GRP      = Font(name="맑은 고딕", size=9, bold=True, color="002060"
 FONT_DST          = Font(name="맑은 고딕", size=9, color="800000")
 FONT_DST_GRP      = Font(name="맑은 고딕", size=9, bold=True, color="9C0006")
 
+# 스케줄 열 폰트 (틸 계열) / Schedule Column Font (Teal Palette)
+FONT_SCHED        = Font(name="맑은 고딕", size=9, color="1B4D4B")
+FONT_SCHED_GRP    = Font(name="맑은 고딕", size=9, bold=True, color="113634")
+
 # 비활성화 행 폰트 / Disabled Row Font Colors
 FONT_DIS          = Font(name="맑은 고딕", size=9, color="495057")
 FONT_DIS_SRC      = Font(name="맑은 고딕", size=9, color="1B365D")
 FONT_DIS_DST      = Font(name="맑은 고딕", size=9, color="6B1D1D")
+FONT_DIS_SCHED    = Font(name="맑은 고딕", size=9, color="3D5554")
 
 # Action 및 vDOM 폰트 / Action (Accept / Deny) & vDOM Fonts
 ACCEPT_FONT      = Font(name="맑은 고딕", size=9, color="008000", bold=True)
@@ -1000,8 +1240,8 @@ CENTER = Alignment(horizontal='center', vertical='top', wrap_text=True)
 
 def get_cell_style(col_category, seq, is_disabled, is_group=False, is_action=False, action_val=''):
     """
-    [한국어] 행 전체 열에 일관된 배경색(Zebra 격행 / 비활성화 진한 회색)을 적용하고, 영역별(출발지/목적지/액션) 글씨색을 지정
-    [English] Apply consistent background fill (Zebra striping / Disabled dark gray) across the entire row and assign specific font colors
+    행 전체 열에 일관된 배경색(Zebra 격행 / 비활성화 진한 회색)을 적용하고, 영역별(출발지/목적지/액션) 글씨색을 지정
+    Apply consistent background fill (Zebra striping / Disabled dark gray) across the entire row and assign specific font colors
     """
     if is_disabled:
         fill = DIS_ROW_FILL
@@ -1022,6 +1262,8 @@ def get_cell_style(col_category, seq, is_disabled, is_group=False, is_action=Fal
             font = FONT_DIS_SRC
         elif col_category == 'dst':
             font = FONT_DIS_DST
+        elif col_category == 'sched':
+            font = FONT_DIS_SCHED
         else:
             font = FONT_DIS
     else:
@@ -1029,6 +1271,8 @@ def get_cell_style(col_category, seq, is_disabled, is_group=False, is_action=Fal
             font = FONT_SRC_GRP if is_group else FONT_SRC
         elif col_category == 'dst':
             font = FONT_DST_GRP if is_group else FONT_DST
+        elif col_category == 'sched':
+            font = FONT_SCHED_GRP if is_group else FONT_SCHED
         else:
             font = FONT_DEFAULT_BOLD if is_group else FONT_DEFAULT
 
@@ -1054,6 +1298,8 @@ def write_styled_header(ws, row, headers_with_cat):
             fill = HDR_DST_FILL
         elif cat == 'svc':
             fill = HDR_SVC_FILL
+        elif cat == 'sched':
+            fill = HDR_SCHED_FILL
         else:
             fill = HDR_DEFAULT_FILL
         sc(ws, row, col, h, font=HDR_FONT, fill=fill, align=CENTER)
@@ -1101,8 +1347,8 @@ TAB_COLOR_EMPTY = "FFFF0000"  # 빈 시트 빨간색 탭 색상 (Solid Red ARGB)
 
 def check_and_mark_empty_sheet_tabs(wb, empty_tab_color=TAB_COLOR_EMPTY):
     """
-    [한국어] 컬럼 헤더(1행) 외에 데이터 내용이 전혀 없는 빈 시트의 탭 색상을 빨간색으로 표시
-    [English] Mark sheet tab color as red for sheets that have no data content beyond the header row
+    컬럼 헤더(1행) 외에 데이터 내용이 전혀 없는 빈 시트의 탭 색상을 빨간색으로 표시
+    Mark sheet tab color as red for sheets that have no data content beyond the header row
     """
     for ws in wb.worksheets:
         if ws.title in ("Summary", "vDOM Total Summary"):
@@ -1136,8 +1382,12 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
         # 서비스 열 (19~22) - Protocol 제외 / Service columns (19-22) - Protocol omitted
         ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
         ("Svc Port", "svc"), ("Svc Comment", "svc"),
-        # 기타 필드 열 (23~33) / Miscellaneous columns (23-33)
-        ("Schedule", "base"), ("NAT", "base"), ("IP Pool", "base"),
+        # 스케줄 열 (23~27) / Schedule columns (23-27)
+        ("Sched Group OBJ", "sched"), ("Sched OBJ Name", "sched"),
+        ("Sched Type", "sched"), ("Sched Time", "sched"),
+        ("Sched Comment", "sched"),
+        # 기타 필드 열 (28~37) / Miscellaneous columns (28-37)
+        ("NAT", "base"), ("IP Pool", "base"),
         ("Pool Name", "base"), ("Pool IP", "base"),
         ("Inspection Mode", "base"), ("UTM Status", "base"),
         ("Sec Profile", "base"), ("Sec Profile Comment", "base"),
@@ -1169,6 +1419,8 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
         dg_fill, dg_font = get_cell_style('dst', seq, is_dis, is_group=True)
         v_fill, v_font = get_cell_style('svc', seq, is_dis)
         vg_fill, vg_font = get_cell_style('svc', seq, is_dis, is_group=True)
+        sc_fill, sc_font = get_cell_style('sched', seq, is_dis)
+        scg_fill, scg_font = get_cell_style('sched', seq, is_dis, is_group=True)
         act_fill, act_font = get_cell_style('base', seq, is_dis, is_action=True, action_val=action)
 
         src_expanded = []
@@ -1190,6 +1442,9 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
         svc_expanded = []
         for svc_name in (p.get('service') or []):
             svc_expanded.extend(resolver.resolve_service(svc_name))
+
+        sched_name = p.get('schedule', '')
+        sched_expanded = resolver.resolve_schedule(sched_name)
 
         pool_items = []
         for pn in (p.get('poolname') or []):
@@ -1236,7 +1491,8 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
             log_traffic_str = '\n'.join(logs)
 
         max_rows = max(len(src_expanded), len(dst_expanded),
-                       len(svc_expanded), len(pool_items), 1)
+                       len(svc_expanded), len(pool_items),
+                       len(sched_expanded), 1)
         p_start = row
         p_end = row + max_rows - 1
 
@@ -1301,41 +1557,53 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
                 for c in range(19, 23):
                     sc(ws, cur_r, c, None, font=v_font, fill=v_fill)
 
-            # 기타 필드 열 (23~33) / Miscellaneous columns (23-33)
+            # 스케줄 열 (23~27) / Schedule columns (23-27)
+            if ri < len(sched_expanded):
+                scgrp, scname, sctype, sctime, sccomm = sched_expanded[ri]
+                sc(ws, cur_r, 23, scgrp or '', font=scg_font if scgrp else sc_font, fill=sc_fill)
+                sc(ws, cur_r, 24, scname, font=sc_font, fill=sc_fill)
+                sc(ws, cur_r, 25, sctype, font=sc_font, fill=sc_fill, align=CENTER)
+                sc(ws, cur_r, 26, sctime, font=sc_font, fill=sc_fill)
+                sc(ws, cur_r, 27, sccomm, font=sc_font, fill=sc_fill)
+            else:
+                for c in range(23, 28):
+                    sc(ws, cur_r, c, None, font=sc_font, fill=sc_fill)
+
+            # 기타 필드 열 (28~37) / Miscellaneous columns (28-37)
             if ri == 0:
                 utm_val = 'enable' if p.get('utm-status') == 'enable' else 'disable'
-                sc(ws, cur_r, 23, p.get('schedule', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 24, p.get('nat', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 25, p.get('ippool', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 28, insp_mode_display, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 29, utm_val, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 30, sec_profile_str, font=b_font, fill=b_fill)
-                sc(ws, cur_r, 31, sec_profile_comment_str, font=b_font, fill=b_fill)
-                sc(ws, cur_r, 32, log_traffic_str, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 33, p.get('comments', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 28, p.get('nat', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 29, p.get('ippool', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 32, insp_mode_display, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 33, utm_val, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 34, sec_profile_str, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 35, sec_profile_comment_str, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 36, log_traffic_str, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 37, p.get('comments', ''), font=b_font, fill=b_fill)
             else:
-                for c in [23, 24, 25, 28, 29, 30, 31, 32, 33]:
+                for c in [28, 29, 32, 33, 34, 35, 36, 37]:
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
             if ri < len(pool_items):
                 pname, pip, ptype = pool_items[ri]
-                sc(ws, cur_r, 26, pname, font=b_font, fill=b_fill)
-                sc(ws, cur_r, 27, pip, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 30, pname, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 31, pip, font=b_font, fill=b_fill)
             else:
-                sc(ws, cur_r, 26, None, font=b_font, fill=b_fill)
-                sc(ws, cur_r, 27, None, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 30, None, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 31, None, font=b_font, fill=b_fill)
 
         if p_end > p_start:
-            common_cols = [1, 2, 3, 4, 5, 6, 7, 13, 23, 24, 25, 28, 29, 30, 31, 32, 33]
+            common_cols = [1, 2, 3, 4, 5, 6, 7, 13, 28, 29, 32, 33, 34, 35, 36, 37]
             for c in common_cols:
                 merge_row_range(ws, p_start, p_end, c)
             if len(pool_items) <= 1:
-                merge_row_range(ws, p_start, p_end, 26)
-                merge_row_range(ws, p_start, p_end, 27)
+                merge_row_range(ws, p_start, p_end, 30)
+                merge_row_range(ws, p_start, p_end, 31)
 
             merge_group_spans(ws, p_start, src_expanded, 8, h_align='left')
             merge_group_spans(ws, p_start, dst_expanded, 14, h_align='left')
             merge_group_spans(ws, p_start, svc_expanded, 19, h_align='left')
+            merge_group_spans(ws, p_start, sched_expanded, 23, h_align='left')
 
         row += max_rows
 
@@ -1361,7 +1629,11 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
         # 서비스 열 (17~20) - Protocol 제외 / Service columns (17-20) - Protocol omitted
         ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
         ("Svc Port", "svc"), ("Svc Comment", "svc"),
-        ("Schedule", "base"), ("Comments", "base")
+        # 스케줄 열 (21~25) / Schedule columns (21-25)
+        ("Sched Group OBJ", "sched"), ("Sched OBJ Name", "sched"),
+        ("Sched Type", "sched"), ("Sched Time", "sched"),
+        ("Sched Comment", "sched"),
+        ("Comments", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -1380,6 +1652,8 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
         dg_fill, dg_font = get_cell_style('dst', seq, is_dis, is_group=True)
         v_fill, v_font = get_cell_style('svc', seq, is_dis)
         vg_fill, vg_font = get_cell_style('svc', seq, is_dis, is_group=True)
+        sc_fill, sc_font = get_cell_style('sched', seq, is_dis)
+        scg_fill, scg_font = get_cell_style('sched', seq, is_dis, is_group=True)
         act_fill, act_font = get_cell_style('base', seq, is_dis, is_action=True, action_val=action)
 
         src_expanded = []
@@ -1391,8 +1665,10 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
         svc_expanded = []
         for s in (p.get('service') or []):
             svc_expanded.extend(resolver.resolve_service(s))
+        sched_name = p.get('schedule', '')
+        sched_expanded = resolver.resolve_schedule(sched_name)
 
-        max_rows = max(len(src_expanded), len(dst_expanded), len(svc_expanded), 1)
+        max_rows = max(len(src_expanded), len(dst_expanded), len(svc_expanded), len(sched_expanded), 1)
         p_start = row
         p_end = row + max_rows - 1
 
@@ -1405,10 +1681,9 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
                 sc(ws, cur_r, 4, p.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 5, p.get('intf', ''), font=b_font, fill=b_fill)
                 sc(ws, cur_r, 16, action.upper(), font=act_font, fill=act_fill, align=CENTER)
-                sc(ws, cur_r, 21, p.get('schedule', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 22, p.get('comments', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 26, p.get('comments', ''), font=b_font, fill=b_fill)
             else:
-                for c in [1, 2, 3, 4, 5, 16, 21, 22]:
+                for c in [1, 2, 3, 4, 5, 16, 26]:
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
             # 출발지 / Src (Source)
@@ -1446,13 +1721,26 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
                 for c in range(17, 21):
                     sc(ws, cur_r, c, None, font=v_font, fill=v_fill)
 
+            # 스케줄 / Schedule
+            if ri < len(sched_expanded):
+                scgrp, scname, sctype, sctime, sccomm = sched_expanded[ri]
+                sc(ws, cur_r, 21, scgrp or '', font=scg_font if scgrp else sc_font, fill=sc_fill)
+                sc(ws, cur_r, 22, scname, font=sc_font, fill=sc_fill)
+                sc(ws, cur_r, 23, sctype, font=sc_font, fill=sc_fill, align=CENTER)
+                sc(ws, cur_r, 24, sctime, font=sc_font, fill=sc_fill)
+                sc(ws, cur_r, 25, sccomm, font=sc_font, fill=sc_fill)
+            else:
+                for c in range(21, 26):
+                    sc(ws, cur_r, c, None, font=sc_font, fill=sc_fill)
+
         if p_end > p_start:
-            common_cols = [1, 2, 3, 4, 5, 16, 21, 22]
+            common_cols = [1, 2, 3, 4, 5, 16, 26]
             for c in common_cols:
                 merge_row_range(ws, p_start, p_end, c)
             merge_group_spans(ws, p_start, src_expanded, 6, h_align='left')
             merge_group_spans(ws, p_start, dst_expanded, 11, h_align='left')
             merge_group_spans(ws, p_start, svc_expanded, 17, h_align='left')
+            merge_group_spans(ws, p_start, sched_expanded, 21, h_align='left')
 
         row += max_rows
 
@@ -1670,10 +1958,10 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
         ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
         ("Svc Port", "svc"), ("Svc Comment", "svc"),
         ("Comments", "base"),
-        # 아노말리 변칙 탐지 열 (21~25) / Anomaly detection columns (21-25)
+        # 아노말리 변칙 탐지 열 (21~26) / Anomaly detection columns (21-26)
         ("Anomaly Name", "base"), ("Anomaly Status", "base"),
-        ("Anomaly Log", "base"), ("Anomaly Action", "base"),
-        ("Anomaly Threshold", "base")
+        ("Anomaly Log", "base"), ("Anomaly Quarant", "base"),
+        ("Anomaly Action", "base"), ("Anomaly Threshold", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -1759,15 +2047,29 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
             # 변칙 탐지 / Anomaly
             if ri < len(anomalies):
                 a = anomalies[ri]
-                aact = a.get('action', '')
-                afont = DENY_FONT if aact == 'block' else b_font
+                aact = a.get('action') or 'disable'
+                if aact.lower() in ('block', 'deny'):
+                    afont = DENY_FONT
+                elif aact.lower() in ('pass', 'accept'):
+                    afont = ACCEPT_FONT
+                else:
+                    afont = b_font
+
+                astatus = a.get('status') or 'disable'
+                alog = a.get('log') or 'disable'
+                aquar = a.get('quarantine') or 'disable'
+                if aquar.lower() != 'attacker':
+                    aquar = 'disable'
+                athresh = a.get('threshold', '')
+
                 sc(ws, cur_r, 21, a.get('name', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 22, a.get('status', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 23, a.get('log', ''), font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 24, aact, font=afont, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 25, a.get('threshold', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 22, astatus, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 23, alog, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 24, aquar, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 25, aact, font=afont, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 26, athresh, font=b_font, fill=b_fill, align=CENTER)
             else:
-                for c in range(21, 26):
+                for c in range(21, 27):
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
         if p_end > p_start:
@@ -1847,6 +2149,9 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
         ("Service Objects", obj_counts[2]),
         ("Service Groups", obj_counts[3]),
         ("IP Pools", obj_counts[4]),
+        ("Schedule Recurring", obj_counts[5] if len(obj_counts) > 5 else 0),
+        ("Schedule Onetime", obj_counts[6] if len(obj_counts) > 6 else 0),
+        ("Schedule Groups", obj_counts[7] if len(obj_counts) > 7 else 0),
     ]
 
     for idx, (label, cnt) in enumerate(items, 2):
@@ -3241,6 +3546,9 @@ class FortiGateGUI:
 
             all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
             all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
+            all_sched_recur = parse_schedule_recurring(lines, 0, len(lines)-1)
+            all_sched_onetime = parse_schedule_onetime(lines, 0, len(lines)-1)
+            all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
 
             # 3. vDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per vDOM & Generate Individual Excel Files
             summary_list = []
@@ -3262,8 +3570,24 @@ class FortiGateGUI:
                 svcgrp_dict = parse_service_groups(lines, vs, ve)
                 ippool_dict = parse_ippool_objects(lines, vs, ve)
 
-                resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=merged_ext_res)
-                obj_counts = [len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict)]
+                merged_sched_recur = dict(all_sched_recur)
+                merged_sched_recur.update(parse_schedule_recurring(lines, vs, ve))
+                merged_sched_onetime = dict(all_sched_onetime)
+                merged_sched_onetime.update(parse_schedule_onetime(lines, vs, ve))
+                merged_sched_grp = dict(all_sched_grp)
+                merged_sched_grp.update(parse_schedule_group(lines, vs, ve))
+
+                resolver = ObjectResolver(
+                    addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict,
+                    ext_resources=merged_ext_res,
+                    sched_recurring_dict=merged_sched_recur,
+                    sched_onetime_dict=merged_sched_onetime,
+                    sched_group_dict=merged_sched_grp
+                )
+                obj_counts = [
+                    len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict),
+                    len(merged_sched_recur), len(merged_sched_onetime), len(merged_sched_grp)
+                ]
                 vdom_obj_counts[vdom_name] = obj_counts
 
                 fw_pols = []
@@ -3307,14 +3631,15 @@ class FortiGateGUI:
             tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
                            "Central-NAT", "DNAT (VIP)", "DoS Policy",
                            "Address Objects", "Addr Groups",
-                           "Service Objects", "Svc Groups", "IP Pools"]
+                           "Service Objects", "Svc Groups", "IP Pools",
+                           "Sched Recurring", "Sched Onetime", "Sched Groups"]
             for col, h in enumerate(tot_headers, 1):
                 sc(ws_tot, 1, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
             ws_tot.freeze_panes = "A2"
 
             for ri, (vdom, counts) in enumerate(summary_list, 2):
                 fill = EVEN_ROW_FILL if ri % 2 == 0 else ODD_ROW_FILL
-                oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0])
+                oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0, 0, 0, 0])
                 vals = [vdom] + counts + oc
                 for col, v in enumerate(vals, 1):
                     f = Font(name="맑은 고딕", size=10, bold=(col == 1))
@@ -3325,7 +3650,7 @@ class FortiGateGUI:
             for col in range(2, len(tot_headers) + 1):
                 total = sum(
                     (summary_list[r][1][col - 2] if col <= 6 else
-                     vdom_obj_counts.get(summary_list[r][0], [0]*5)[col - 7])
+                     vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 7])
                     for r in range(len(summary_list))
                 )
                 sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
@@ -3414,6 +3739,9 @@ def run_cli(config_file=None, base_dir=None):
 
     all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
     all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
+    all_sched_recur = parse_schedule_recurring(lines, 0, len(lines)-1)
+    all_sched_onetime = parse_schedule_onetime(lines, 0, len(lines)-1)
+    all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
 
     summary_list = []
     vdom_obj_counts = {}
@@ -3432,8 +3760,24 @@ def run_cli(config_file=None, base_dir=None):
         svcgrp_dict = parse_service_groups(lines, vs, ve)
         ippool_dict = parse_ippool_objects(lines, vs, ve)
 
-        resolver = ObjectResolver(addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict, ext_resources=merged_ext_res)
-        obj_counts = [len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict)]
+        merged_sched_recur = dict(all_sched_recur)
+        merged_sched_recur.update(parse_schedule_recurring(lines, vs, ve))
+        merged_sched_onetime = dict(all_sched_onetime)
+        merged_sched_onetime.update(parse_schedule_onetime(lines, vs, ve))
+        merged_sched_grp = dict(all_sched_grp)
+        merged_sched_grp.update(parse_schedule_group(lines, vs, ve))
+
+        resolver = ObjectResolver(
+            addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict,
+            ext_resources=merged_ext_res,
+            sched_recurring_dict=merged_sched_recur,
+            sched_onetime_dict=merged_sched_onetime,
+            sched_group_dict=merged_sched_grp
+        )
+        obj_counts = [
+            len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict),
+            len(merged_sched_recur), len(merged_sched_onetime), len(merged_sched_grp)
+        ]
         vdom_obj_counts[vdom_name] = obj_counts
 
         fw_pols = []
@@ -3476,14 +3820,15 @@ def run_cli(config_file=None, base_dir=None):
     tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
                    "Central-NAT", "DNAT (VIP)", "DoS Policy",
                    "Address Objects", "Addr Groups",
-                   "Service Objects", "Svc Groups", "IP Pools"]
+                   "Service Objects", "Svc Groups", "IP Pools",
+                   "Sched Recurring", "Sched Onetime", "Sched Groups"]
     for col, h in enumerate(tot_headers, 1):
         sc(ws_tot, 1, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
     ws_tot.freeze_panes = "A2"
 
     for ri, (vdom, counts) in enumerate(summary_list, 2):
         fill = EVEN_ROW_FILL if ri % 2 == 0 else ODD_ROW_FILL
-        oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0])
+        oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0, 0, 0, 0])
         vals = [vdom] + counts + oc
         for col, v in enumerate(vals, 1):
             f = Font(name="맑은 고딕", size=10, bold=(col == 1))
@@ -3494,7 +3839,7 @@ def run_cli(config_file=None, base_dir=None):
     for col in range(2, len(tot_headers) + 1):
         total = sum(
             (summary_list[r][1][col - 2] if col <= 6 else
-             vdom_obj_counts.get(summary_list[r][0], [0]*5)[col - 7])
+             vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 7])
             for r in range(len(summary_list))
         )
         sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
