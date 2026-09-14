@@ -3506,7 +3506,7 @@ def main():
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
         run_gui()
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
-        print("FortiGate Policy to Excel Exporter v1.1")
+        print("FortiGate Policy to Excel Exporter v1.2")
         print("Usage:")
         print("  GUI Mode : python fortigate_policy_to_excel.py [--gui]")
         print("  CLI Mode : python fortigate_policy_to_excel.py <config_file> [output_dir]")
