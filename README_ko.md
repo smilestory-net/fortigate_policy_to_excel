@@ -64,6 +64,7 @@
   * 서비스(Service) 영역: 블루그레이 계열 헤더
 * **줄무늬 음영 (Zebra Striping)**: 행 전체 열에 일관된 홀수/짝수 교차 배경색을 적용하여 시선 이동이 편안합니다.
 * **비활성화 정책 음영**: 비활성화된 정책(`Enable == N`)은 진한 회색 배경으로 표시되어 활성 정책과 즉시 구별됩니다.
+* **내용 없는 빈 시트 빨간색 탭 표시**: 설정된 정책이나 리소스가 없어 컬럼 헤더(1행) 외에 본문 데이터가 전혀 없는 시트는 엑셀 탭 색상을 **빨간색(Red)**으로 자동 지정하여 비어 있는 정책 항목을 한눈에 즉시 식별할 수 있습니다.
 
 ### 8. 호스트네임 디렉토리 생성 및 VDOM별 엑셀 파일 분할
 * 대용량 설정 파일의 전체 정책을 단일 엑셀에 몰아넣을 때 발생하는 렉(버벅임)을 원천 차단합니다.
@@ -281,7 +282,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 18: Comment            - VIP 객체 코멘트
 ```
 
-### 5. DoS Policy 시트 컬럼 구성 (25개 열)
+### 5. DoS Policy 시트 컬럼 구성 (26개 열)
 
 ```
 [정책 기본 정보]
@@ -317,9 +318,10 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 [비정상 트래픽 탐지 (Anomaly Detection)]
   Col 21: Anomaly Name       - 공격 유형 / 비정상 트래픽 명칭 (예: tcp_syn_flood 등)
   Col 22: Anomaly Status     - 아노말리 방어 활성화 상태 (enable / disable)
-  Col 23: Anomaly Log        - 차단 로그 기록 여부
-  Col 24: Anomaly Action     - 조치 방식 (pass / block)
-  Col 25: Anomaly Threshold  - 임계값 (Threshold 패킷/초)
+  Col 23: Anomaly Log        - 차단 로그 기록 여부 (enable / disable)
+  Col 24: Anomaly Quarant    - 격리 설정 (attacker / disable)
+  Col 25: Anomaly Action     - 조치 방식 (pass / block / disable)
+  Col 26: Anomaly Threshold  - 임계값 (Threshold 패킷/초)
 ```
 
 ### 6. External Resource 시트 컬럼 구성 (9개 열)
