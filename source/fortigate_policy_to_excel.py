@@ -1391,7 +1391,7 @@ def write_fw_policy_sheet(ws, policies, resolver, vdom_name="", dn_ents=None, pr
         ("Pool Name", "base"), ("Pool IP", "base"),
         ("Inspection Mode", "base"), ("UTM Status", "base"),
         ("Sec Profile", "base"), ("Sec Profile Comment", "base"),
-        ("Log Traffic", "base"), ("Policy Comment", "base")
+        ("Log Traffic", "base"), ("Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -1633,7 +1633,7 @@ def write_local_in_sheet(ws, policies, resolver, vdom_name=""):
         ("Sched Group OBJ", "sched"), ("Sched OBJ Name", "sched"),
         ("Sched Type", "sched"), ("Sched Time", "sched"),
         ("Sched Comment", "sched"),
-        ("Comments", "base")
+        ("Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -1764,7 +1764,7 @@ def write_central_nat_sheet(ws, entries, resolver, vdom_name=""):
         ("Dst Type", "dst"), ("Dst IP", "dst"), ("Dst Comment", "dst"),
         # IP 풀 및 기타 열 (17~21) / IP Pool & Other columns (17-21)
         ("NAT IP Pool Name", "base"), ("NAT Pool IP", "base"),
-        ("NAT Pool Type", "base"), ("NAT", "base"), ("Comments", "base")
+        ("NAT Pool Type", "base"), ("NAT", "base"), ("Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -1957,11 +1957,11 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
         # 서비스 열 (16~19) - Protocol 제외 / Service columns (16-19) - Protocol omitted
         ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
         ("Svc Port", "svc"), ("Svc Comment", "svc"),
-        ("Comments", "base"),
-        # 아노말리 변칙 탐지 열 (21~26) / Anomaly detection columns (21-26)
+        # 아노말리 변칙 탐지 열 (20~25) / Anomaly detection columns (20-25)
         ("Anomaly Name", "base"), ("Anomaly Status", "base"),
         ("Anomaly Log", "base"), ("Anomaly Quarant", "base"),
-        ("Anomaly Action", "base"), ("Anomaly Threshold", "base")
+        ("Anomaly Action", "base"), ("Anomaly Threshold", "base"),
+        ("Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
@@ -2004,9 +2004,9 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
                 sc(ws, cur_r, 3, 'N' if is_dis else 'Y', font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 4, p.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 5, p.get('interface', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 20, p.get('comments', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 26, p.get('comments', ''), font=b_font, fill=b_fill)
             else:
-                for c in [1, 2, 3, 4, 5, 20]:
+                for c in [1, 2, 3, 4, 5, 26]:
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
             # 출발지 / Src (Source)
@@ -2062,18 +2062,18 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
                     aquar = 'disable'
                 athresh = a.get('threshold', '')
 
-                sc(ws, cur_r, 21, a.get('name', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 22, astatus, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 23, alog, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 24, aquar, font=b_font, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 25, aact, font=afont, fill=b_fill, align=CENTER)
-                sc(ws, cur_r, 26, athresh, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 20, a.get('name', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 21, astatus, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 22, alog, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 23, aquar, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 24, aact, font=afont, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 25, athresh, font=b_font, fill=b_fill, align=CENTER)
             else:
-                for c in range(21, 27):
+                for c in range(20, 26):
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
 
         if p_end > p_start:
-            common_cols = [1, 2, 3, 4, 5, 20]
+            common_cols = [1, 2, 3, 4, 5, 26]
             for c in common_cols:
                 merge_row_range(ws, p_start, p_end, c)
             merge_group_spans(ws, p_start, src_expanded, 6, h_align='left')
@@ -2094,7 +2094,7 @@ def write_external_resource_sheet(ws, resources, vdom_name=""):
         ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"), ("Name", "base"),
         ("Type", "base"), ("Resource URL", "base"),
         ("Refresh Rate (min)", "base"), ("Source IP", "base"),
-        ("Comments", "base")
+        ("Comment", "base")
     ]
     write_styled_header(ws, 1, headers_with_cat)
     ncol = len(headers_with_cat)
