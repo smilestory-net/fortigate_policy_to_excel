@@ -6,19 +6,21 @@ FortiGate Configuration -> Excel Exporter & GUI (Unified Single-File Edition)
 FortiGate 방화벽 설정 파일(.conf)을 분석하여:
   1. 호스트네임 디렉토리 생성 및 각 vDOM별 엑셀 파일(<vdom_name>.xlsx) 분할 생성
   2. 전체 vDOM 총괄 요약 파일(_TOTAL_SUMMARY.xlsx) 동시 생성
-  3. 객체/그룹의 실제 IP, 서브넷, 포트, 코멘트를 다중 행 전개 및 스마트 셀 세로 병합(Merge)
-  4. Svc Protocol 컬럼 삭제, Svc Port 'ALL' 표기, Src/Dst/Svc Comment 분리 수록
-  5. 출발지(파랑), 목적지(빨강) 가독성 컬러 스타일링 및 비활성화 정책(진한 회색) 음영 처리
-  6. 모던 다크 테마 GUI 및 커맨드라인(CLI) 모드 완벽 통합 지원
+  3. 10대 핵심 정책, 라우팅(Static/Policy/OSPF) 및 IPsec VPN 개별 시트 완벽 분리 수록
+  4. 객체/그룹의 실제 IP, 서브넷, 포트, 코멘트를 다중 행 전개 및 스마트 셀 세로 병합(Merge)
+  5. Svc Protocol 컬럼 삭제, Svc Port 'ALL' 표기, Src/Dst/Svc Comment 분리 수록
+  6. 출발지(파랑), 목적지(빨강) 가독성 컬러 스타일링 및 비활성화 정책(진한 회색) 음영 처리
+  7. 모던 다크 테마 GUI 및 커맨드라인(CLI) 모드 완벽 통합 지원
 
 
 Parses FortiGate firewall backup configuration files (.conf / .txt) to:
   1. Create a hostname-based directory with partitioned Excel files per vDOM (<vdom_name>.xlsx)
   2. Simultaneously generate a master summary workbook (_TOTAL_SUMMARY.xlsx) across all vDOMs
-  3. Recursively resolve objects/groups to actual IPs/ports/comments with multi-row flattening & cell merging
-  4. Optimize service ports ('ALL') and provide dedicated Src/Dst/Svc Comment columns
-  5. Apply professional visual styling (Src blue, Dst red, zebra striping, disabled policy shading)
-  6. Provide an integrated modern Dark Theme GUI and headless CLI execution in a single file
+  3. Fully extract 10 core policies, routing (Static/Policy/OSPF), and IPsec VPN into dedicated sheets
+  4. Recursively resolve objects/groups to actual IPs/ports/comments with multi-row flattening & cell merging
+  5. Optimize service ports ('ALL') and provide dedicated Src/Dst/Svc Comment columns
+  6. Apply professional visual styling (Src blue, Dst red, zebra striping, disabled policy shading)
+  7. Provide an integrated modern Dark Theme GUI and headless CLI execution in a single file
 
 Usage / 사용법:
   - GUI Mode: python fortigate_policy_to_excel.py (Run without args or double-click / 인자 없이 실행)
@@ -61,6 +63,7 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.cell_range import CellRange
 except ImportError:
     print("openpyxl 필요: pip install openpyxl")
     sys.exit(1)
@@ -782,6 +785,8 @@ class ObjectResolver:
         self.sched_recurring = sched_recurring_dict or {}
         self.sched_onetime = sched_onetime_dict or {}
         self.sched_groups = sched_group_dict or {}
+        self._addr_cache = {}
+        self._svc_cache = {}
 
     def resolve_address(self, name, _visited=None):
         """
@@ -789,7 +794,10 @@ class ObjectResolver:
         Recursively resolve address object or group into individual member entries
         Returns: list of (group_name, obj_name, obj_type, formatted_ip, comment)
         """
-        if _visited is None:
+        top_level = (_visited is None)
+        if top_level:
+            if name in self._addr_cache:
+                return self._addr_cache[name]
             _visited = set()
         if name in _visited:
             return [(None, name, 'ref-loop', '', '')]
@@ -808,19 +816,30 @@ class ObjectResolver:
                     result.append((name, item[1], item[2], item[3], c))
             if not result:
                 result.append((None, name, 'group(empty)', '', grp_comment))
+            if top_level:
+                self._addr_cache[name] = result
             return result
 
         if name in self.addrs:
             obj = self.addrs[name]
             f_ip = format_ip_str(obj)
-            return [(None, name, obj.get('type', 'ipmask'), f_ip, obj.get('comment', ''))]
+            res = [(None, name, obj.get('type', 'ipmask'), f_ip, obj.get('comment', ''))]
+            if top_level:
+                self._addr_cache[name] = res
+            return res
 
         if name in self.ext_resources:
             ext = self.ext_resources[name]
             ext_type = ext.get('type', 'external-resource')
-            return [(None, name, ext_type, ext.get('resource', ''), ext.get('comments', ''))]
+            res = [(None, name, ext_type, ext.get('resource', ''), ext.get('comments', ''))]
+            if top_level:
+                self._addr_cache[name] = res
+            return res
 
-        return [(None, name, 'unknown', '', '')]
+        res = [(None, name, 'unknown', '', '')]
+        if top_level:
+            self._addr_cache[name] = res
+        return res
 
     def resolve_service(self, name, _visited=None):
         """
@@ -828,7 +847,10 @@ class ObjectResolver:
         Recursively resolve service object or group into individual service/port entries
         Returns: list of (group_name, svc_name, port_display, comment)
         """
-        if _visited is None:
+        top_level = (_visited is None)
+        if top_level:
+            if name in self._svc_cache:
+                return self._svc_cache[name]
             _visited = set()
         if name in _visited:
             return [(None, name, '', '')]
@@ -845,7 +867,10 @@ class ObjectResolver:
                 for item in sub:
                     c = item[3] or grp_comment
                     result.append((name, item[1], item[2], c))
-            return result if result else [(None, name, '', grp_comment)]
+            res = result if result else [(None, name, '', grp_comment)]
+            if top_level:
+                self._svc_cache[name] = res
+            return res
 
         if name in self.svcs:
             obj = self.svcs[name]
@@ -871,9 +896,15 @@ class ObjectResolver:
             if port_display in ('IP/ALL', ''):
                 if name == 'ALL':
                     port_display = 'ALL'
-            return [(None, name, port_display, obj.get('comment', ''))]
+            res = [(None, name, port_display, obj.get('comment', ''))]
+            if top_level:
+                self._svc_cache[name] = res
+            return res
 
-        return [(None, name, '', '')]
+        res = [(None, name, '', '')]
+        if top_level:
+            self._svc_cache[name] = res
+        return res
 
     def resolve_ippool(self, name):
         """IP Pool 이름 -> (pool_name, pool_ip_display, pool_type) / Resolve IP pool name to display tuple"""
@@ -1185,6 +1216,617 @@ def parse_dos_policy(lines, sec_start, sec_end):
     return policies
 
 
+def parse_firewall_acl(lines, sec_start, sec_end):
+    """
+    config firewall acl 파싱
+    Returns list of ACL policy dicts
+    """
+    policies = []
+    i = sec_start + 1
+    while i <= sec_end:
+        if lines[i].strip().startswith("edit "):
+            p = {
+                'id': parse_edit_id(lines[i]),
+                'status': 'enable',
+                'interface': '',
+                'srcaddr': [],
+                'dstaddr': [],
+                'service': [],
+                'comments': ''
+            }
+            i += 1
+            while i <= sec_end:
+                s = lines[i].strip()
+                if s in ("next", "end"):
+                    break
+                if s.startswith("set "):
+                    f = get_field_name(lines[i])
+                    if f in ('srcaddr', 'dstaddr', 'service'):
+                        p[f] = parse_quoted_values(lines[i])
+                    elif f in ('comments', 'comment'):
+                        p['comments'] = parse_set_value(lines[i])
+                    else:
+                        p[f] = parse_set_value(lines[i])
+                i += 1
+            policies.append(p)
+        i += 1
+    return policies
+
+
+def parse_router_static(lines, vdom_start, vdom_end):
+    """config router static -> list of static route dicts"""
+    routes = []
+    ranges = find_section_range(lines, vdom_start, vdom_end, "router static")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                route_id = parse_edit_id(lines[i])
+                r = {
+                    'id': route_id,
+                    'status': 'enable',
+                    'dst': '0.0.0.0/0',
+                    'dst_raw': '',
+                    'gateway': '',
+                    'device': '',
+                    'distance': '10',
+                    'priority': '1',
+                    'comment': '',
+                    'blackhole': 'disable',
+                    'dynamic-gateway': 'disable',
+                    'link-monitor-exempt': 'disable',
+                    'bfd': 'disable',
+                }
+                has_dst = False
+                has_distance = False
+                has_priority = False
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        v = parse_set_value(lines[i])
+                        if f == 'dst':
+                            has_dst = True
+                            parts = v.split()
+                            if len(parts) == 2:
+                                ip, pf = format_subnet(parts[0], parts[1])
+                                r['dst'] = f"{ip}/{pf}" if pf else ip
+                            elif '/' in v:
+                                r['dst'] = v
+                            else:
+                                r['dst'] = v
+                            r['dst_raw'] = v
+                        elif f == 'gateway':
+                            r['gateway'] = v
+                        elif f == 'device':
+                            r['device'] = v
+                        elif f == 'distance':
+                            r['distance'] = v
+                            has_distance = True
+                        elif f == 'priority':
+                            r['priority'] = v
+                            has_priority = True
+                        elif f == 'status':
+                            r['status'] = v
+                        elif f in ('comment', 'comments'):
+                            r['comment'] = v
+                        elif f == 'blackhole':
+                            r['blackhole'] = v
+                        elif f == 'dynamic-gateway':
+                            r['dynamic-gateway'] = v
+                        elif f == 'link-monitor-exempt':
+                            r['link-monitor-exempt'] = v
+                        elif f == 'bfd':
+                            r['bfd'] = v
+                    i += 1
+                if not has_distance:
+                    r['distance'] = '10'
+                if not has_priority:
+                    r['priority'] = '1'
+                routes.append(r)
+            i += 1
+    return routes
+
+
+def parse_router_policy(lines, vdom_start, vdom_end):
+    """config router policy -> list of policy route dicts"""
+    policies = []
+    ranges = find_section_range(lines, vdom_start, vdom_end, "router policy")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                pol_id = parse_edit_id(lines[i])
+                p = {
+                    'id': pol_id,
+                    'status': 'enable',
+                    'seq-num': '',
+                    'input-device': [],
+                    'output-device': [],
+                    'srcaddr': [],
+                    'src': '',
+                    'dstaddr': [],
+                    'dst': '',
+                    'action': 'permit',
+                    'protocol': '0',
+                    'start-port': '',
+                    'end-port': '',
+                    'gateway': '',
+                    'comments': ''
+                }
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        if f in ('input-device', 'output-device'):
+                            p[f] = parse_quoted_values(lines[i])
+                        elif f in ('srcaddr', 'dstaddr'):
+                            p[f] = parse_quoted_values(lines[i])
+                        else:
+                            v = parse_set_value(lines[i])
+                            if f == 'src':
+                                parts = v.split()
+                                if len(parts) == 2:
+                                    ip, pf = format_subnet(parts[0], parts[1])
+                                    p['src'] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    p['src'] = v
+                            elif f == 'dst':
+                                parts = v.split()
+                                if len(parts) == 2:
+                                    ip, pf = format_subnet(parts[0], parts[1])
+                                    p['dst'] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    p['dst'] = v
+                            else:
+                                p[f] = v
+                    i += 1
+                policies.append(p)
+            i += 1
+    return policies
+
+
+def parse_router_ospf(lines, vdom_start, vdom_end):
+    """config router ospf -> dict containing router-id, networks, interfaces, redistribute, areas"""
+    data = {
+        'router-id': '',
+        'networks': [],
+        'interfaces': [],
+        'redistribute': [],
+        'areas': []
+    }
+    ranges = find_section_range(lines, vdom_start, vdom_end, "router ospf")
+    if not ranges:
+        return data
+
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            s = lines[i].strip()
+            if s.startswith("set router-id "):
+                data['router-id'] = parse_set_value(lines[i])
+            elif s == "config network":
+                i += 1
+                while i <= er:
+                    s2 = lines[i].strip()
+                    if s2 == "end":
+                        break
+                    if s2.startswith("edit "):
+                        net_id = parse_edit_id(lines[i])
+                        net_entry = {'id': net_id, 'prefix': '', 'area': '0.0.0.0'}
+                        i += 1
+                        while i <= er:
+                            s3 = lines[i].strip()
+                            if s3 in ("next", "end"):
+                                break
+                            if s3.startswith("set prefix "):
+                                v = parse_set_value(lines[i])
+                                parts = v.split()
+                                if len(parts) == 2:
+                                    ip, pf = format_subnet(parts[0], parts[1])
+                                    net_entry['prefix'] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    net_entry['prefix'] = v
+                            elif s3.startswith("set area "):
+                                net_entry['area'] = parse_set_value(lines[i])
+                            i += 1
+                        data['networks'].append(net_entry)
+                    i += 1
+            elif s == "config ospf-interface":
+                i += 1
+                while i <= er:
+                    s2 = lines[i].strip()
+                    if s2 == "end":
+                        break
+                    if s2.startswith("edit "):
+                        intf_name = parse_edit_id(lines[i])
+                        intf_entry = {
+                            'name': intf_name, 'interface': '', 'cost': '',
+                            'priority': '', 'dead-interval': '', 'hello-interval': '',
+                            'network-type': '', 'authentication': ''
+                        }
+                        i += 1
+                        while i <= er:
+                            s3 = lines[i].strip()
+                            if s3 in ("next", "end"):
+                                break
+                            if s3.startswith("set "):
+                                f = get_field_name(lines[i])
+                                intf_entry[f] = parse_set_value(lines[i])
+                            i += 1
+                        data['interfaces'].append(intf_entry)
+                    i += 1
+            elif s.startswith("config redistribute "):
+                proto = parse_edit_id(s)
+                redist_entry = {'protocol': proto, 'status': 'disable', 'routemap': '', 'metric': '', 'metric-type': ''}
+                i += 1
+                while i <= er:
+                    s2 = lines[i].strip()
+                    if s2 == "end":
+                        break
+                    if s2.startswith("set "):
+                        f = get_field_name(lines[i])
+                        redist_entry[f] = parse_set_value(lines[i])
+                    i += 1
+                data['redistribute'].append(redist_entry)
+            elif s == "config area":
+                i += 1
+                while i <= er:
+                    s2 = lines[i].strip()
+                    if s2 == "end":
+                        break
+                    if s2.startswith("edit "):
+                        area_id = parse_edit_id(lines[i])
+                        area_entry = {'id': area_id, 'type': 'regular'}
+                        i += 1
+                        while i <= er:
+                            s3 = lines[i].strip()
+                            if s3 in ("next", "end"):
+                                break
+                            if s3.startswith("set type "):
+                                area_entry['type'] = parse_set_value(lines[i])
+                            i += 1
+                        data['areas'].append(area_entry)
+                    i += 1
+            i += 1
+
+    acls, rmaps = parse_router_route_map_and_acl(lines, vdom_start, vdom_end)
+    data['access_lists'] = acls
+    data['route_maps'] = rmaps
+    return data
+
+
+def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
+    """
+    config router route-map 및 config router access-list 파싱
+    Returns (acls_dict, route_maps_dict)
+    """
+    acls = {}
+    acl_ranges = find_section_range(lines, vdom_start, vdom_end, "router access-list")
+    for sr, er in acl_ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                acl = {'name': name, 'comments': '', 'rules': []}
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set comments ") or s.startswith("set comment "):
+                        acl['comments'] = parse_set_value(lines[i])
+                    elif s == "config rule":
+                        i += 1
+                        while i <= er:
+                            s2 = lines[i].strip()
+                            if s2 == "end":
+                                break
+                            if s2.startswith("edit "):
+                                rid = parse_edit_id(lines[i])
+                                rule = {'id': rid, 'action': 'permit', 'prefix': '', 'exact_match': 'disable'}
+                                i += 1
+                                while i <= er:
+                                    s3 = lines[i].strip()
+                                    if s3 in ("next", "end"):
+                                        break
+                                    if s3.startswith("set action "):
+                                        rule['action'] = parse_set_value(lines[i])
+                                    elif s3.startswith("set prefix "):
+                                        v = parse_set_value(lines[i])
+                                        parts = v.split()
+                                        if len(parts) == 2:
+                                            ip, pf = format_subnet(parts[0], parts[1])
+                                            rule['prefix'] = f"{ip}/{pf}" if pf else ip
+                                        else:
+                                            rule['prefix'] = v
+                                    elif s3.startswith("set exact-match "):
+                                        rule['exact_match'] = parse_set_value(lines[i])
+                                    i += 1
+                                acl['rules'].append(rule)
+                            i += 1
+                    i += 1
+                acls[name] = acl
+            i += 1
+
+    rmaps = {}
+    rm_ranges = find_section_range(lines, vdom_start, vdom_end, "router route-map")
+    for sr, er in rm_ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                rm = {'name': name, 'comments': '', 'rules': []}
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set comments ") or s.startswith("set comment "):
+                        rm['comments'] = parse_set_value(lines[i])
+                    elif s == "config rule":
+                        i += 1
+                        while i <= er:
+                            s2 = lines[i].strip()
+                            if s2 == "end":
+                                break
+                            if s2.startswith("edit "):
+                                rid = parse_edit_id(lines[i])
+                                rrule = {'id': rid, 'action': 'permit', 'match_ip': '', 'set_actions': []}
+                                i += 1
+                                while i <= er:
+                                    s3 = lines[i].strip()
+                                    if s3 in ("next", "end"):
+                                        break
+                                    if s3.startswith("set action "):
+                                        rrule['action'] = parse_set_value(lines[i])
+                                    elif s3.startswith("set match-ip-address "):
+                                        rrule['match_ip'] = parse_set_value(lines[i])
+                                    elif s3.startswith("set "):
+                                        rrule['set_actions'].append(lines[i].strip())
+                                    i += 1
+                                rm['rules'].append(rrule)
+                            i += 1
+                    i += 1
+                rmaps[name] = rm
+            i += 1
+
+    return acls, rmaps
+
+
+def parse_system_interfaces(lines):
+    """
+    config system interface 파싱
+    Returns dict: vdom_name -> list of interface dicts
+    """
+    vdom_intfs = {}
+    ranges = find_section_range(lines, 0, len(lines)-1, "system interface")
+    for sr, er in ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                name = parse_edit_id(lines[i])
+                intf = {
+                    'name': name,
+                    'vdom': 'root',
+                    'ip': '',
+                    'prefix': '',
+                    'display': '',
+                    'secondary_ips': [],
+                    'remote-ip': '',
+                    'type': 'physical',
+                    'vlanid': '',
+                    'interface': '',
+                    'member': [],
+                    'status': 'up',
+                    'mode': 'static',
+                    'vrf': '0',
+                    'allowaccess': '',
+                    'alias': '',
+                    'description': '',
+                    'speed': '',
+                    'mtu': ''
+                }
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s == "config secondaryip":
+                        i += 1
+                        while i <= er:
+                            s2 = lines[i].strip()
+                            if s2 == "end":
+                                break
+                            if s2.startswith("edit "):
+                                i += 1
+                                while i <= er:
+                                    s3 = lines[i].strip()
+                                    if s3 in ("next", "end"):
+                                        break
+                                    if s3.startswith("set ip "):
+                                        vip = parse_set_value(lines[i])
+                                        parts = vip.split()
+                                        if len(parts) == 2:
+                                            sip, spf = format_subnet(parts[0], parts[1])
+                                            sec_str = f"{sip}/{spf}" if spf else sip
+                                        else:
+                                            sec_str = vip
+                                        intf['secondary_ips'].append(sec_str)
+                                    i += 1
+                            i += 1
+                    elif s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        v = parse_set_value(lines[i])
+                        if f == 'ip':
+                            parts = v.split()
+                            if len(parts) == 2:
+                                ip, pf = format_subnet(parts[0], parts[1])
+                                intf['ip'] = ip
+                                intf['prefix'] = pf
+                                intf['display'] = f"{ip}/{pf}" if pf else ip
+                            elif '/' in v:
+                                intf['display'] = v
+                            else:
+                                intf['display'] = v
+                        elif f == 'remote-ip':
+                            parts = v.split()
+                            if len(parts) == 2:
+                                rip, rpf = format_subnet(parts[0], parts[1])
+                                intf['remote-ip'] = f"{rip}/{rpf}" if rpf else rip
+                            elif '/' in v:
+                                intf['remote-ip'] = v
+                            else:
+                                intf['remote-ip'] = v
+                        elif f == 'allowaccess':
+                            intf['allowaccess'] = ' '.join(parse_quoted_values(lines[i])) or v
+                        elif f == 'member':
+                            intf['member'] = parse_quoted_values(lines[i])
+                        else:
+                            intf[f] = v
+                    i += 1
+                vdom = intf.get('vdom', 'root')
+                vdom_intfs.setdefault(vdom, []).append(intf)
+            i += 1
+    return vdom_intfs
+
+
+def parse_ipsec_vpn(lines, vdom_start, vdom_end):
+    """
+    config vpn ipsec phase1-interface & phase2-interface 파싱
+    Returns list of dicts: each containing phase1 info + list of phase2 entries
+    """
+    p1_list = []
+    p1_dict = OrderedDict()
+
+    # 1. Phase 1 파싱
+    p1_ranges = find_section_range(lines, vdom_start, vdom_end, "vpn ipsec phase1-interface")
+    for sr, er in p1_ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                p1_name = parse_edit_id(lines[i])
+                p1 = {
+                    'name': p1_name,
+                    'type': 'static',
+                    'interface': '',
+                    'ike-version': '1',
+                    'local-gw': '',
+                    'remote-gw': '',
+                    'peertype': '',
+                    'proposal': '',
+                    'dhgrp': '14 5',
+                    'nattraversal': 'enable',
+                    'keepalive': '10',
+                    'dpd': 'on-demand',
+                    'dpd-retrycount': '3',
+                    'dpd-retryinterval': '20',
+                    'fec-egress': 'disable',
+                    'fec-ingress': 'disable',
+                    'add-gw-route': 'enable',
+                    'auto-discovery-sender': 'disable',
+                    'auto-discovery-receiver': 'disable',
+                    'exchange-interface-ip': 'disable',
+                    'net-device': 'disable',
+                    'comments': '',
+                    'peerid': '',
+                    'phase2_list': []
+                }
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        if f == 'proposal':
+                            p1['proposal'] = ' '.join(parse_quoted_values(lines[i])) or parse_set_value(lines[i])
+                        else:
+                            p1[f] = parse_set_value(lines[i])
+                    i += 1
+                p1_dict[p1_name] = p1
+                p1_list.append(p1)
+            i += 1
+
+    # 2. Phase 2 파싱
+    p2_ranges = find_section_range(lines, vdom_start, vdom_end, "vpn ipsec phase2-interface")
+    for sr, er in p2_ranges:
+        i = sr + 1
+        while i <= er:
+            if lines[i].strip().startswith("edit "):
+                p2_name = parse_edit_id(lines[i])
+                p2 = {
+                    'name': p2_name,
+                    'phase1name': '',
+                    'proposal': '',
+                    'dhgrp': '14 5',
+                    'src-addr-type': 'subnet',
+                    'src-subnet': '',
+                    'src-name': '',
+                    'dst-addr-type': 'subnet',
+                    'dst-subnet': '',
+                    'dst-name': '',
+                    'auto-negotiate': 'disable',
+                    'keepalive': 'disable',
+                    'keylifeseconds': '',
+                    'comments': ''
+                }
+                has_dhgrp = False
+                i += 1
+                while i <= er:
+                    s = lines[i].strip()
+                    if s in ("next", "end"):
+                        break
+                    if s.startswith("set "):
+                        f = get_field_name(lines[i])
+                        if f == 'dhgrp':
+                            p2['dhgrp'] = parse_set_value(lines[i])
+                            has_dhgrp = True
+                        elif f == 'proposal':
+                            p2['proposal'] = ' '.join(parse_quoted_values(lines[i])) or parse_set_value(lines[i])
+                        elif f in ('src-subnet', 'dst-subnet'):
+                            v = parse_set_value(lines[i])
+                            parts = v.split()
+                            if len(parts) == 2:
+                                ip, pf = format_subnet(parts[0], parts[1])
+                                p2[f] = f"{ip}/{pf}" if pf else ip
+                            else:
+                                p2[f] = v
+                        else:
+                            p2[f] = parse_set_value(lines[i])
+                    i += 1
+                p1_target = p2.get('phase1name', '')
+                if p1_target in p1_dict:
+                    p1_dict[p1_target]['phase2_list'].append(p2)
+                else:
+                    orphan_p1 = {
+                        'name': p1_target or '(Unlinked)',
+                        'type': '',
+                        'interface': '',
+                        'ike-version': '',
+                        'local-gw': '',
+                        'remote-gw': '',
+                        'peertype': '',
+                        'proposal': '',
+                        'dhgrp': '',
+                        'dpd': '',
+                        'comments': '',
+                        'peerid': '',
+                        'phase2_list': [p2]
+                    }
+                    p1_dict[orphan_p1['name']] = orphan_p1
+                    p1_list.append(orphan_p1)
+            i += 1
+
+    return p1_list
+
+
 # ================================================================
 #  6. Excel 스타일 & 셀 병합 유틸리티 / Excel Styling & Cell Formatting Utilities
 # ================================================================
@@ -1195,6 +1837,8 @@ HDR_SRC_FILL     = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_ty
 HDR_DST_FILL     = PatternFill(start_color="843C39", end_color="843C39", fill_type="solid") # 진한 빨강 (목적지) / Deep Red (Destination)
 HDR_SVC_FILL     = PatternFill(start_color="415A77", end_color="415A77", fill_type="solid") # 블루그레이 (서비스) / Blue-Gray (Service)
 HDR_SCHED_FILL   = PatternFill(start_color="2A5C5A", end_color="2A5C5A", fill_type="solid") # 딥 틸 (스케줄) / Deep Teal (Schedule)
+HDR_P1_FILL      = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # 딥 네이비 블루 (IPsec Phase 1) / Deep Navy Blue
+HDR_P2_FILL      = PatternFill(start_color="2A5C5A", end_color="2A5C5A", fill_type="solid") # 딥 틸 (IPsec Phase 2) / Deep Teal
 HDR_FONT         = Font(name="맑은 고딕", size=10, bold=True, color="FFFFFF")
 
 # --- 데이터 행 배경색 (행 전체 열에 일괄 적용) / Data Row Fills (Zebra Striping across all columns) ---
@@ -1280,17 +1924,26 @@ def get_cell_style(col_category, seq, is_disabled, is_group=False, is_action=Fal
 
 
 def sc(ws, r, c, val, font=FONT_DEFAULT, fill=None, align=WRAP):
-    """Set cell with styling."""
+    """Set cell with styling (High-Performance Cached Style Engine)."""
     cell = ws.cell(row=r, column=c, value=val)
-    cell.font = font
-    cell.alignment = align
-    cell.border = THIN_BORDER
-    if fill:
-        cell.fill = fill
+    key = (id(font), id(fill), id(align))
+    if not hasattr(ws, '_sc_cache'):
+        ws._sc_cache = {}
+    st = ws._sc_cache.get(key)
+    if st is not None:
+        cell._style = st
+    else:
+        cell.font = font
+        cell.alignment = align
+        cell.border = THIN_BORDER
+        if fill:
+            cell.fill = fill
+        ws._sc_cache[key] = cell._style
     return cell
 
 
 def write_styled_header(ws, row, headers_with_cat):
+    has_multiline = any('\n' in str(h) for h, _ in headers_with_cat)
     for col, (h, cat) in enumerate(headers_with_cat, 1):
         if cat == 'src':
             fill = HDR_SRC_FILL
@@ -1300,16 +1953,21 @@ def write_styled_header(ws, row, headers_with_cat):
             fill = HDR_SVC_FILL
         elif cat == 'sched':
             fill = HDR_SCHED_FILL
+        elif cat == 'p1':
+            fill = HDR_P1_FILL
+        elif cat == 'p2':
+            fill = HDR_P2_FILL
         else:
             fill = HDR_DEFAULT_FILL
         sc(ws, row, col, h, font=HDR_FONT, fill=fill, align=CENTER)
+    if has_multiline:
+        ws.row_dimensions[row].height = 28
     ws.freeze_panes = ws.cell(row=row + 1, column=1).coordinate
 
 
 def merge_row_range(ws, start_row, end_row, col, h_align=None):
     if end_row > start_row:
-        ws.merge_cells(start_row=start_row, start_column=col,
-                       end_row=end_row, end_column=col)
+        ws.merged_cells.ranges.add(CellRange(min_row=start_row, min_col=col, max_row=end_row, max_col=col))
         cell = ws.cell(row=start_row, column=col)
         cur_h = h_align or (cell.alignment.horizontal if cell.alignment else 'center')
         cell.alignment = Alignment(horizontal=cur_h, vertical='top', wrap_text=True)
@@ -1332,13 +1990,25 @@ def merge_group_spans(ws, p_start, expanded_list, col, h_align='left'):
 
 
 def auto_fit(ws, min_w=6, max_w=45):
+    # 다중 열 병합 셀(섹션 타이틀 등)을 수집하여 단일 열 너비 과다 확장 방지
+    multi_col_merged = set()
+    for rng in ws.merged_cells.ranges:
+        if rng.min_col < rng.max_col:
+            for r in range(rng.min_row, rng.max_row + 1):
+                for c in range(rng.min_col, rng.max_col + 1):
+                    multi_col_merged.add((r, c))
+
     for col_cells in ws.columns:
         mx = 0
         cl = get_column_letter(col_cells[0].column)
+        col_idx = col_cells[0].column
         for cell in col_cells:
-            if cell.value:
+            if (cell.row, col_idx) in multi_col_merged:
+                continue
+            if cell.value is not None:
                 for line in str(cell.value).split('\n'):
-                    mx = max(mx, len(line))
+                    line_w = sum(2 if ord(ch) > 127 else 1 for ch in line)
+                    mx = max(mx, line_w)
         ws.column_dimensions[cl].width = min(max(mx + 2, min_w), max_w)
 
 
@@ -2086,6 +2756,124 @@ def write_dos_sheet(ws, policies, resolver, vdom_name=""):
     return ws
 
 
+# ================================================================
+# 12. 시트 작성 - ACL Policy / Sheet Builder - ACL Policy (config firewall acl)
+# ================================================================
+
+def write_acl_sheet(ws, policies, resolver, vdom_name=""):
+    """
+    'ACL Policy' 시트 작성 / Sheet Builder - ACL Policy (config firewall acl)
+    출발지/목적지 그룹 객체 자동 전개, 서비스 그룹 전개 지원
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"),
+        ("ID", "base"), ("Interface", "base"),
+        # 출발지 열 (6~10) / Source columns (6-10)
+        ("Src Group OBJ", "src"), ("Src OBJ Name", "src"),
+        ("Src Type", "src"), ("Src IP", "src"), ("Src Comment", "src"),
+        # 목적지 열 (11~15) / Destination columns (11-15)
+        ("Dst Group OBJ", "dst"), ("Dst OBJ Name", "dst"),
+        ("Dst Type", "dst"), ("Dst IP", "dst"), ("Dst Comment", "dst"),
+        # 서비스 열 (16~19) / Service columns (16-19)
+        ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
+        ("Svc Port", "svc"), ("Svc Comment", "svc"),
+        # 코멘트 열 (20) / Comment column (20)
+        ("Comment", "base")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    if not policies:
+        return ws
+
+    row = 2
+    seq = 0
+    for p in policies:
+        seq += 1
+        is_dis = p.get('status', 'enable') == 'disable'
+
+        b_fill, b_font = get_cell_style('base', seq, is_dis)
+        s_fill, s_font = get_cell_style('src', seq, is_dis)
+        sg_fill, sg_font = get_cell_style('src', seq, is_dis, is_group=True)
+        d_fill, d_font = get_cell_style('dst', seq, is_dis)
+        dg_fill, dg_font = get_cell_style('dst', seq, is_dis, is_group=True)
+        v_fill, v_font = get_cell_style('svc', seq, is_dis)
+        vg_fill, vg_font = get_cell_style('svc', seq, is_dis, is_group=True)
+
+        src_expanded = []
+        for a in (p.get('srcaddr') or []):
+            src_expanded.extend(resolver.resolve_address(a))
+        dst_expanded = []
+        for a in (p.get('dstaddr') or []):
+            dst_expanded.extend(resolver.resolve_address(a))
+        svc_expanded = []
+        for s in (p.get('service') or []):
+            svc_expanded.extend(resolver.resolve_service(s))
+
+        max_rows = max(len(src_expanded), len(dst_expanded), len(svc_expanded), 1)
+        p_start = row
+        p_end = row + max_rows - 1
+
+        for ri in range(max_rows):
+            cur_r = row + ri
+            if ri == 0:
+                sc(ws, cur_r, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 3, 'N' if is_dis else 'Y', font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 4, p.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 5, p.get('interface', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 20, p.get('comments', ''), font=b_font, fill=b_fill)
+            else:
+                for c in [1, 2, 3, 4, 5, 20]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
+
+            # 출발지 / Src (Source)
+            if ri < len(src_expanded):
+                grp, n, t, ip, comm = src_expanded[ri]
+                sc(ws, cur_r, 6, grp or '', font=sg_font if grp else s_font, fill=s_fill)
+                sc(ws, cur_r, 7, n, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 8, t, font=s_font, fill=s_fill, align=CENTER)
+                sc(ws, cur_r, 9, ip, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 10, comm, font=s_font, fill=s_fill)
+            else:
+                for c in range(6, 11):
+                    sc(ws, cur_r, c, None, font=s_font, fill=s_fill)
+
+            # 목적지 / Dst (Destination)
+            if ri < len(dst_expanded):
+                grp, n, t, ip, comm = dst_expanded[ri]
+                sc(ws, cur_r, 11, grp or '', font=dg_font if grp else d_font, fill=d_fill)
+                sc(ws, cur_r, 12, n, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 13, t, font=d_font, fill=d_fill, align=CENTER)
+                sc(ws, cur_r, 14, ip, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 15, comm, font=d_font, fill=d_fill)
+            else:
+                for c in range(11, 16):
+                    sc(ws, cur_r, c, None, font=d_font, fill=d_fill)
+
+            # 서비스 / Service
+            if ri < len(svc_expanded):
+                sgrp, sn, sport, scomm = svc_expanded[ri]
+                sc(ws, cur_r, 16, sgrp or '', font=vg_font if sgrp else v_font, fill=v_fill)
+                sc(ws, cur_r, 17, sn, font=v_font, fill=v_fill)
+                sc(ws, cur_r, 18, sport, font=v_font, fill=v_fill)
+                sc(ws, cur_r, 19, scomm, font=v_font, fill=v_fill)
+            else:
+                for c in range(16, 20):
+                    sc(ws, cur_r, c, None, font=v_font, fill=v_fill)
+
+        if p_end > p_start:
+            for c in [1, 2, 3, 4, 5]:
+                merge_row_range(ws, p_start, p_end, c, h_align='center')
+            merge_row_range(ws, p_start, p_end, 20, h_align='left')
+            merge_group_spans(ws, p_start, src_expanded, 6, h_align='left')
+            merge_group_spans(ws, p_start, dst_expanded, 11, h_align='left')
+            merge_group_spans(ws, p_start, svc_expanded, 16, h_align='left')
+
+        row += max_rows
+
+    auto_fit(ws)
+    return ws
+
+
 def write_external_resource_sheet(ws, resources, vdom_name=""):
     """
     'External Resource' 시트 작성 / Sheet Builder - External Resource
@@ -2124,10 +2912,612 @@ def write_external_resource_sheet(ws, resources, vdom_name=""):
 
 
 # ================================================================
-# 12. 개별 vDOM 엑셀 생성 함수 / Per-vDOM Excel Generation Function
+#  12. 시트 작성 - Static Route / Sheet Builder - Static Route
 # ================================================================
 
-def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None):
+def write_static_route_sheet(ws, static_routes, vdom_name=""):
+    """
+    'Static Route' 시트 작성 / Sheet Builder - Static Route
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"), ("ID", "base"),
+        ("Destination", "dst"), ("Gateway", "src"), ("Interface", "base"),
+        ("Distance", "base"), ("Priority", "base"), ("Options", "base"),
+        ("Comment", "base")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    if not static_routes:
+        return ws
+
+    row = 2
+    for seq, r in enumerate(static_routes, 1):
+        is_dis = (r.get('status') == 'disable')
+        b_fill, b_font = get_cell_style('base', seq, is_dis)
+        s_fill, s_font = get_cell_style('src', seq, is_dis)
+        d_fill, d_font = get_cell_style('dst', seq, is_dis)
+
+        enable_val = 'N' if is_dis else 'Y'
+
+        opts = []
+        if r.get('blackhole') == 'enable':
+            opts.append('Blackhole')
+        if r.get('dynamic-gateway') == 'enable':
+            opts.append('Dynamic-GW')
+        if r.get('bfd') == 'enable':
+            opts.append('BFD')
+        if r.get('link-monitor-exempt') == 'enable':
+            opts.append('Link-Mon-Exempt')
+        options_str = ', '.join(opts)
+
+        sc(ws, row, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 3, enable_val, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 4, r.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 5, r.get('dst', '0.0.0.0/0'), font=d_font, fill=d_fill)
+        sc(ws, row, 6, r.get('gateway', ''), font=s_font, fill=s_fill, align=CENTER)
+        sc(ws, row, 7, r.get('device', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 8, r.get('distance', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 9, r.get('priority', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 10, options_str, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 11, r.get('comment', ''), font=b_font, fill=b_fill)
+        row += 1
+
+    auto_fit(ws)
+    return ws
+
+
+# ================================================================
+#  13. 시트 작성 - Policy Route / Sheet Builder - Policy Route
+# ================================================================
+
+def write_policy_route_sheet(ws, policy_routes, resolver, vdom_name=""):
+    """
+    'Policy Route' 시트 작성 / Sheet Builder - Policy Route
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("vDOM", "base"), ("Enable", "base"), ("ID", "base"),
+        ("Incoming Intf", "src"), ("Outgoing Intf", "dst"), ("Gateway", "base"),
+        ("Action", "base"), ("Protocol", "base"), ("Port Range", "base"),
+        # 출발지 열 (11~15)
+        ("Src Group OBJ", "src"), ("Src OBJ Name", "src"),
+        ("Src Type", "src"), ("Src IP", "src"), ("Src Comment", "src"),
+        # 목적지 열 (16~20)
+        ("Dst Group OBJ", "dst"), ("Dst OBJ Name", "dst"),
+        ("Dst Type", "dst"), ("Dst IP", "dst"), ("Dst Comment", "dst"),
+        # 코멘트 (21)
+        ("Comment", "base")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    if not policy_routes:
+        return ws
+
+    proto_names = {
+        '0': 'ALL', '1': 'ICMP(1)', '6': 'TCP(6)', '17': 'UDP(17)',
+        '47': 'GRE(47)', '50': 'ESP(50)', '51': 'AH(51)', '89': 'OSPF(89)'
+    }
+
+    row = 2
+    for seq, p in enumerate(policy_routes, 1):
+        is_dis = (p.get('status') == 'disable')
+        action_val = p.get('action', 'permit')
+        b_fill, b_font = get_cell_style('base', seq, is_dis)
+        s_fill, s_font = get_cell_style('src', seq, is_dis)
+        sg_fill, sg_font = get_cell_style('src', seq, is_dis, is_group=True)
+        d_fill, d_font = get_cell_style('dst', seq, is_dis)
+        dg_fill, dg_font = get_cell_style('dst', seq, is_dis, is_group=True)
+        _, act_font = get_cell_style('base', seq, is_dis, is_action=True, action_val='accept' if action_val == 'permit' else 'deny')
+
+        # 출발지 전개
+        src_expanded = []
+        for a in (p.get('srcaddr') or []):
+            src_expanded.extend(resolver.resolve_address(a))
+        if not src_expanded and p.get('src'):
+            src_expanded = [('', '(subnet)', 'ipmask', p.get('src'), '')]
+
+        # 목적지 전개
+        dst_expanded = []
+        for a in (p.get('dstaddr') or []):
+            dst_expanded.extend(resolver.resolve_address(a))
+        if not dst_expanded and p.get('dst'):
+            dst_expanded = [('', '(subnet)', 'ipmask', p.get('dst'), '')]
+
+        max_rows = max(len(src_expanded), len(dst_expanded), 1)
+        p_start = row
+        p_end = row + max_rows - 1
+
+        proto_val = str(p.get('protocol', '0'))
+        proto_str = proto_names.get(proto_val, f"Proto({proto_val})")
+        start_p = p.get('start-port', '')
+        end_p = p.get('end-port', '')
+        if start_p and end_p:
+            port_str = f"{start_p}" if start_p == end_p else f"{start_p}-{end_p}"
+        elif start_p:
+            port_str = f"{start_p}"
+        else:
+            port_str = "ALL"
+
+        in_intf = '\n'.join(p.get('input-device') or [])
+        out_intf = '\n'.join(p.get('output-device') or [])
+
+        for ri in range(max_rows):
+            cur_r = row + ri
+            if ri == 0:
+                sc(ws, cur_r, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 3, 'N' if is_dis else 'Y', font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 4, p.get('id', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 5, in_intf, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 6, out_intf, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 7, p.get('gateway', ''), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 8, action_val, font=act_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 9, proto_str, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 10, port_str, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 21, p.get('comments', ''), font=b_font, fill=b_fill)
+            else:
+                for c in [1, 2, 3, 4, 7, 8, 9, 10, 21]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
+                sc(ws, cur_r, 5, None, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 6, None, font=d_font, fill=d_fill)
+
+            # 출발지
+            if ri < len(src_expanded):
+                grp, n, t, ip, comm = src_expanded[ri]
+                sc(ws, cur_r, 11, grp or '', font=sg_font if grp else s_font, fill=s_fill)
+                sc(ws, cur_r, 12, n, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 13, t, font=s_font, fill=s_fill, align=CENTER)
+                sc(ws, cur_r, 14, ip, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 15, comm, font=s_font, fill=s_fill)
+            else:
+                for c in range(11, 16):
+                    sc(ws, cur_r, c, None, font=s_font, fill=s_fill)
+
+            # 목적지
+            if ri < len(dst_expanded):
+                grp, n, t, ip, comm = dst_expanded[ri]
+                sc(ws, cur_r, 16, grp or '', font=dg_font if grp else d_font, fill=d_fill)
+                sc(ws, cur_r, 17, n, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 18, t, font=d_font, fill=d_fill, align=CENTER)
+                sc(ws, cur_r, 19, ip, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 20, comm, font=d_font, fill=d_fill)
+            else:
+                for c in range(16, 21):
+                    sc(ws, cur_r, c, None, font=d_font, fill=d_fill)
+
+        # 병합
+        if max_rows > 1:
+            for c in [1, 2, 3, 4, 7, 8, 9, 10]:
+                merge_row_range(ws, p_start, p_end, c, h_align='center')
+            for c in [5, 6, 21]:
+                merge_row_range(ws, p_start, p_end, c, h_align='left')
+            merge_group_spans(ws, p_start, src_expanded, 11, h_align='left')
+            merge_group_spans(ws, p_start, dst_expanded, 16, h_align='left')
+
+        row += max_rows
+
+    auto_fit(ws)
+    return ws
+
+
+# ================================================================
+#  14. 시트 작성 - OSPF / Sheet Builder - OSPF
+# ================================================================
+
+def write_ospf_sheet(ws, ospf_data, vdom_name=""):
+    """
+    'OSPF' 시트 작성 / Sheet Builder - OSPF
+    """
+    has_ospf = bool(ospf_data and (
+        ospf_data.get('router-id') or
+        ospf_data.get('networks') or
+        ospf_data.get('interfaces') or
+        any(r.get('status') == 'enable' for r in ospf_data.get('redistribute', []))
+    ))
+
+    if not has_ospf:
+        # 비어있는 경우 표준 헤더만 1행에 배치하여 자동 빨간색 탭 마킹 지원
+        headers_with_cat = [
+            ("Seq", "base"), ("vDOM", "base"), ("Router ID", "base"),
+            ("Area", "base"), ("Prefix", "base"), ("Interface", "base"), ("Cost", "base")
+        ]
+        write_styled_header(ws, 1, headers_with_cat)
+        return ws
+
+    SEC_TITLE_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    SEC_TITLE_FONT = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+
+    def write_sec_title(ws, r, title, end_col):
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=end_col)
+        for c in range(1, end_col + 1):
+            sc(ws, r, c, title if c == 1 else None, font=SEC_TITLE_FONT, fill=SEC_TITLE_FILL)
+
+    cur_r = 1
+    # 1. Global Info (5열 구성)
+    write_sec_title(ws, cur_r, " 1. OSPF Global Settings", 5)
+    cur_r += 1
+
+    sc(ws, cur_r, 1, "vDOM", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    sc(ws, cur_r, 2, "Router ID", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    sc(ws, cur_r, 3, "Total Networks", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    sc(ws, cur_r, 4, "Total Interfaces", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    sc(ws, cur_r, 5, "Total Areas", font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    cur_r += 1
+
+    sc(ws, cur_r, 1, vdom_name, font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+    sc(ws, cur_r, 2, ospf_data.get('router-id') or '(Not Configured)', font=FONT_DEFAULT_BOLD, fill=ODD_ROW_FILL, align=CENTER)
+    sc(ws, cur_r, 3, len(ospf_data.get('networks', [])), font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+    sc(ws, cur_r, 4, len(ospf_data.get('interfaces', [])), font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+    sc(ws, cur_r, 5, len(ospf_data.get('areas', [])), font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+    cur_r += 2
+
+    # 2. Networks (4열 구성)
+    write_sec_title(ws, cur_r, " 2. OSPF Networks (config network)", 4)
+    cur_r += 1
+
+    net_headers = [("Seq", "base"), ("ID", "base"), ("Prefix", "dst"), ("Area", "src")]
+    for col, (h, cat) in enumerate(net_headers, 1):
+        sc(ws, cur_r, col, h, font=HDR_FONT, fill=HDR_DST_FILL if cat == 'dst' else (HDR_SRC_FILL if cat == 'src' else HDR_DEFAULT_FILL), align=CENTER)
+    cur_r += 1
+
+    networks = ospf_data.get('networks', [])
+    if networks:
+        for seq, net in enumerate(networks, 1):
+            fill = EVEN_ROW_FILL if seq % 2 == 0 else ODD_ROW_FILL
+            sc(ws, cur_r, 1, seq, font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 2, net.get('id', ''), font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 3, net.get('prefix', ''), font=FONT_DST, fill=fill)
+            sc(ws, cur_r, 4, net.get('area', ''), font=FONT_SRC, fill=fill, align=CENTER)
+            cur_r += 1
+    else:
+        sc(ws, cur_r, 1, "(No networks configured)", font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+        cur_r += 1
+    cur_r += 1
+
+    # 3. Interfaces (8열 구성 - Priority 기본값 1, Authentication 기본값 none)
+    write_sec_title(ws, cur_r, " 3. OSPF Interfaces (config ospf-interface)", 8)
+    cur_r += 1
+
+    intf_headers = ["Seq", "Name", "Interface", "Cost", "Dead / Hello Interval", "Network Type", "Priority", "Authentication"]
+    for col, h in enumerate(intf_headers, 1):
+        sc(ws, cur_r, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    cur_r += 1
+
+    interfaces = ospf_data.get('interfaces', [])
+    if interfaces:
+        for seq, inf in enumerate(interfaces, 1):
+            fill = EVEN_ROW_FILL if seq % 2 == 0 else ODD_ROW_FILL
+            interval_str = f"Dead: {inf.get('dead-interval', '-')}, Hello: {inf.get('hello-interval', '-')}"
+            sc(ws, cur_r, 1, seq, font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 2, inf.get('name', ''), font=FONT_DEFAULT_BOLD, fill=fill)
+            sc(ws, cur_r, 3, inf.get('interface', ''), font=FONT_SRC, fill=fill, align=CENTER)
+            sc(ws, cur_r, 4, inf.get('cost', ''), font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 5, interval_str, font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 6, inf.get('network-type', ''), font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 7, inf.get('priority') or '1', font=FONT_DEFAULT, fill=fill, align=CENTER)
+            sc(ws, cur_r, 8, inf.get('authentication') or 'none', font=FONT_DEFAULT, fill=fill, align=CENTER)
+            cur_r += 1
+    else:
+        sc(ws, cur_r, 1, "(No ospf-interfaces configured)", font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+        cur_r += 1
+    cur_r += 1
+
+    # 4. Redistribution (6열 구성)
+    write_sec_title(ws, cur_r, " 4. OSPF Redistribution (config redistribute)", 6)
+    cur_r += 1
+
+    redist_headers = ["Seq", "Protocol", "Status", "Route-Map", "Metric", "Metric Type"]
+    for col, h in enumerate(redist_headers, 1):
+        sc(ws, cur_r, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    cur_r += 1
+
+    redists = [r for r in ospf_data.get('redistribute', []) if r.get('status') == 'enable' or r.get('routemap')]
+    if not redists:
+        redists = ospf_data.get('redistribute', [])
+
+    if redists:
+        for seq, rd in enumerate(redists, 1):
+            is_dis = (rd.get('status') != 'enable')
+            b_fill, b_font = get_cell_style('base', seq, is_dis)
+            sc(ws, cur_r, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+            sc(ws, cur_r, 2, rd.get('protocol', '').upper(), font=b_font, fill=b_fill, align=CENTER)
+            sc(ws, cur_r, 3, rd.get('status', 'disable'), font=b_font, fill=b_fill, align=CENTER)
+            sc(ws, cur_r, 4, rd.get('routemap', ''), font=b_font, fill=b_fill)
+            sc(ws, cur_r, 5, rd.get('metric', ''), font=b_font, fill=b_fill, align=CENTER)
+            sc(ws, cur_r, 6, rd.get('metric-type', ''), font=b_font, fill=b_fill, align=CENTER)
+            cur_r += 1
+    else:
+        sc(ws, cur_r, 1, "(No redistribution configured)", font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+        cur_r += 1
+    cur_r += 1
+
+    # 5. Route-Map & Filter Details (9열 구성 - match-ip 서브넷별 행 분리, Action, Exact Match 분리, Set Actions 열 삭제)
+    write_sec_title(ws, cur_r, " 5. Route-Map & Filter Details (config router route-map / access-list)", 9)
+    cur_r += 1
+
+    rm_headers = ["Seq", "Route-Map", "Rule", "Route-Map Action", "Match Target", "Filtered Prefix", "Action", "Exact Match", "ACL Comment"]
+    for col, h in enumerate(rm_headers, 1):
+        sc(ws, cur_r, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
+    cur_r += 1
+
+    rmaps = ospf_data.get('route_maps', {})
+    acls = ospf_data.get('access_lists', {})
+
+    rm_entries = []
+    for rm_name, rm in rmaps.items():
+        for rule in rm.get('rules', []):
+            rm_entries.append((rm_name, rule))
+
+    if rm_entries:
+        for seq, (rm_name, rule) in enumerate(rm_entries, 1):
+            fill = EVEN_ROW_FILL if seq % 2 == 0 else ODD_ROW_FILL
+            match_ip = rule.get('match_ip', '')
+            match_target = f"match-ip: {match_ip}" if match_ip else "(match all)"
+
+            acl = acls.get(match_ip, {}) if match_ip else {}
+            acl_comm = acl.get('comments', '')
+            acl_rules = acl.get('rules', [])
+
+            max_rows = max(len(acl_rules), 1)
+            p_start = cur_r
+            p_end = cur_r + max_rows - 1
+
+            act_val = rule.get('action', 'permit').upper()
+            act_font = DENY_FONT if act_val == 'DENY' else ACCEPT_FONT
+
+            for ri in range(max_rows):
+                r_now = cur_r + ri
+                if ri == 0:
+                    sc(ws, r_now, 1, seq, font=FONT_DEFAULT, fill=fill, align=CENTER)
+                    sc(ws, r_now, 2, rm_name, font=FONT_DEFAULT_BOLD, fill=fill)
+                    sc(ws, r_now, 3, rule.get('id', ''), font=FONT_DEFAULT, fill=fill, align=CENTER)
+                    sc(ws, r_now, 4, act_val, font=act_font, fill=fill, align=CENTER)
+                    sc(ws, r_now, 5, match_target, font=FONT_DEFAULT, fill=fill)
+                    sc(ws, r_now, 9, acl_comm, font=FONT_DEFAULT, fill=fill)
+                else:
+                    for c in [1, 3, 4]:
+                        sc(ws, r_now, c, None, font=FONT_DEFAULT, fill=fill, align=CENTER)
+                    for c in [2, 5, 9]:
+                        sc(ws, r_now, c, None, font=FONT_DEFAULT, fill=fill)
+
+                if ri < len(acl_rules):
+                    ar = acl_rules[ri]
+                    p_val = ar.get('prefix', '')
+                    a_val = ar.get('action', 'permit')
+                    em_val = ar.get('exact_match', 'disable')
+                    a_font = DENY_FONT if a_val.upper() == 'DENY' else ACCEPT_FONT
+                    sc(ws, r_now, 6, p_val, font=FONT_SRC, fill=fill)
+                    sc(ws, r_now, 7, a_val, font=a_font, fill=fill, align=CENTER)
+                    sc(ws, r_now, 8, em_val, font=FONT_DEFAULT, fill=fill, align=CENTER)
+                else:
+                    pref_fallback = "-" if match_ip else "(all)"
+                    sc(ws, r_now, 6, pref_fallback, font=FONT_DEFAULT, fill=fill)
+                    sc(ws, r_now, 7, "-", font=FONT_DEFAULT, fill=fill, align=CENTER)
+                    sc(ws, r_now, 8, "-", font=FONT_DEFAULT, fill=fill, align=CENTER)
+
+            if p_end > p_start:
+                merge_row_range(ws, p_start, p_end, 1, h_align='center')
+                merge_row_range(ws, p_start, p_end, 2, h_align='left')
+                merge_row_range(ws, p_start, p_end, 3, h_align='center')
+                merge_row_range(ws, p_start, p_end, 4, h_align='center')
+                merge_row_range(ws, p_start, p_end, 5, h_align='left')
+                merge_row_range(ws, p_start, p_end, 9, h_align='left')
+
+            cur_r += max_rows
+    else:
+        sc(ws, cur_r, 1, "(No route-maps configured)", font=FONT_DEFAULT, fill=ODD_ROW_FILL, align=CENTER)
+        cur_r += 1
+
+    auto_fit(ws)
+    return ws
+
+
+# ================================================================
+#  15. 시트 작성 - IPsec VPN / Sheet Builder - IPsec VPN
+# ================================================================
+
+def write_ipsec_vpn_sheet(ws, vpn_data, resolver, vdom_name=""):
+    """
+    'IPsec VPN' 시트 작성 / Sheet Builder - IPsec VPN
+    P1 / P2 헤더 배색 구분, Network & Advanced 설정 완벽 지원, P1/P2 DH Group 기본값(14 5), 서브넷 기본값(0.0.0.0/0)
+    헤더 가독성 향상(2줄 줄바꿈), DPD Retry Interval 숫자 전용 표기
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("vDOM", "base"),
+        # Phase 1 및 Network/Advanced 컬럼 (3~22) - 딥 네이비 헤더
+        ("P1 Name", "p1"), ("Interface", "p1"), ("Remote\nGateway", "p1"), ("Local\nGateway", "p1"),
+        ("IKE\nVersion", "p1"), ("P1 Proposal", "p1"), ("P1 DH\nGroup", "p1"),
+        ("NAT\nTraversal", "p1"), ("Keepalive\nFrequency", "p1"),
+        ("Dead Peer\nDetection (DPD)", "p1"), ("DPD Retry\nCount", "p1"), ("DPD Retry\nInterval", "p1"),
+        ("FEC\nEgress", "p1"), ("FEC\nIngress", "p1"),
+        ("Add\nRoute", "p1"),
+        ("Auto Discovery\nSender", "p1"), ("Auto Discovery\nReceiver", "p1"),
+        ("Exchange\nInterface IP", "p1"), ("Device\nCreation", "p1"),
+        ("P1 Comment", "p1"),
+        # Phase 2 컬럼 (23~30) - 딥 틸 헤더
+        ("P2 Name", "p2"), ("P2 Proposal", "p2"), ("P2 DH\nGroup", "p2"),
+        ("Local Subnet\n/ Src", "p2"), ("Remote Subnet\n/ Dst", "p2"),
+        ("Auto\nNegotiate", "p2"), ("Keepalive", "p2"), ("P2 Comment", "p2")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    if not vpn_data:
+        return ws
+
+    row = 2
+    for seq, p1 in enumerate(vpn_data, 1):
+        b_fill, b_font = get_cell_style('base', seq, False)
+        s_fill, s_font = get_cell_style('src', seq, False)
+        d_fill, d_font = get_cell_style('dst', seq, False)
+
+        p2_list = p1.get('phase2_list', [])
+        max_rows = max(len(p2_list), 1)
+        p_start = row
+        p_end = row + max_rows - 1
+
+        p1_dhgrp = p1.get('dhgrp') or '14 5'
+        p1_dpd = p1.get('dpd') or 'on-demand'
+        p1_retry_cnt = p1.get('dpd-retrycount') or '3'
+        p1_retry_int = str(p1.get('dpd-retryinterval') or '20')
+        p1_natt = p1.get('nattraversal') or 'enable'
+        p1_keepalive = p1.get('keepalive') or '10'
+        p1_fec_egress = p1.get('fec-egress') or 'disable'
+        p1_fec_ingress = p1.get('fec-ingress') or 'disable'
+        p1_add_route = p1.get('add-gw-route') or 'enable'
+        p1_ad_sender = p1.get('auto-discovery-sender') or 'disable'
+        p1_ad_receiver = p1.get('auto-discovery-receiver') or 'disable'
+        p1_ex_intf_ip = p1.get('exchange-interface-ip') or 'disable'
+        p1_dev_creation = p1.get('net-device') or 'disable'
+
+        for ri in range(max_rows):
+            cur_r = row + ri
+            if ri == 0:
+                sc(ws, cur_r, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 3, p1.get('name', ''), font=FONT_DEFAULT_BOLD, fill=b_fill)
+                sc(ws, cur_r, 4, p1.get('interface', ''), font=s_font, fill=s_fill, align=CENTER)
+                sc(ws, cur_r, 5, p1.get('remote-gw', '') or '(Dialup/Dynamic)', font=d_font, fill=d_fill, align=CENTER)
+                sc(ws, cur_r, 6, p1.get('local-gw', '') or '-', font=s_font, fill=s_fill, align=CENTER)
+                sc(ws, cur_r, 7, f"v{p1.get('ike-version', '1')}", font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 8, p1.get('proposal', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 9, p1_dhgrp, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 10, p1_natt, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 11, p1_keepalive, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 12, p1_dpd, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 13, p1_retry_cnt, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 14, p1_retry_int, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 15, p1_fec_egress, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 16, p1_fec_ingress, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 17, p1_add_route, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 18, p1_ad_sender, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 19, p1_ad_receiver, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 20, p1_ex_intf_ip, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 21, p1_dev_creation, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 22, p1.get('comments', ''), font=b_font, fill=b_fill)
+            else:
+                for c in [1, 2, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill, align=CENTER)
+                for c in [4, 6]:
+                    sc(ws, cur_r, c, None, font=s_font, fill=s_fill, align=CENTER)
+                sc(ws, cur_r, 5, None, font=d_font, fill=d_fill, align=CENTER)
+                for c in [3, 8, 22]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
+
+            # Phase 2
+            if ri < len(p2_list):
+                p2 = p2_list[ri]
+                dhgrp_val = p2.get('dhgrp') or '14 5'
+                src_val = p2.get('src-subnet') or p2.get('src-name') or '0.0.0.0/0'
+                dst_val = p2.get('dst-subnet') or p2.get('dst-name') or '0.0.0.0/0'
+
+                sc(ws, cur_r, 23, p2.get('name', ''), font=FONT_DEFAULT_BOLD, fill=b_fill)
+                sc(ws, cur_r, 24, p2.get('proposal', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 25, dhgrp_val, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 26, src_val, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 27, dst_val, font=d_font, fill=d_fill)
+                sc(ws, cur_r, 28, p2.get('auto-negotiate', 'disable'), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 29, p2.get('keepalive', 'disable'), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 30, p2.get('comments', ''), font=b_font, fill=b_fill)
+            else:
+                for c in [23, 24, 30]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
+                for c in [25, 28, 29]:
+                    sc(ws, cur_r, c, None, font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 26, None, font=s_font, fill=s_fill)
+                sc(ws, cur_r, 27, None, font=d_font, fill=d_fill)
+
+        if max_rows > 1:
+            # 가운데 정렬할 Phase 1 열: Seq(1), vDOM(2), Interface(4), Remote GW(5), Local GW(6), IKE Ver(7), DH Group(9), NAT-T(10), Keepalive(11), DPD(12), Retry Cnt(13), Retry Int(14), FEC-E(15), FEC-I(16), Add-Route(17), AD-S(18), AD-R(19), Ex-Intf-IP(20), Dev-Create(21)
+            for c in [1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]:
+                merge_row_range(ws, p_start, p_end, c, h_align='center')
+            # 왼쪽 정렬할 Phase 1 열: P1 Name(3), P1 Proposal(8), P1 Comment(22)
+            for c in [3, 8, 22]:
+                merge_row_range(ws, p_start, p_end, c, h_align='left')
+
+        row += max_rows
+
+    auto_fit(ws)
+    return ws
+
+
+# ================================================================
+#  16. 시트 작성 - Network Interface / Sheet Builder - Network Interface
+# ================================================================
+
+def format_interface_speed(val):
+    """
+    인터페이스 Speed/Duplex 포맷팅 (예: 1000auto -> 1000 / auto, 10000full -> 10000 / full)
+    """
+    if not val:
+        return ''
+    s = str(val).strip()
+    if '/' in s or s.lower() == 'auto':
+        return s
+    m = re.match(r'^(\d+[A-Za-z]?)(auto|full|half)$', s, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)} / {m.group(2)}"
+    return s
+
+
+def write_interface_sheet(ws, interfaces, vdom_name=""):
+    """
+    'Network Interface' 시트 작성 / Sheet Builder - Network Interface
+    """
+    headers_with_cat = [
+        ("Seq", "base"), ("vDOM", "base"), ("Status", "base"), ("Name", "base"),
+        ("Alias", "base"), ("Type", "base"), ("Primary IP", "src"),
+        ("Secondary IP", "src"), ("Remote IP (Tunnel)", "src"),
+        ("VLAN ID", "base"), ("Parent / Member Interface", "base"),
+        ("VRF", "base"), ("Addressing Mode", "base"), ("Administrative Access", "base"),
+        ("Speed / Duplex", "base"), ("Description", "base")
+    ]
+    write_styled_header(ws, 1, headers_with_cat)
+    if not interfaces:
+        return ws
+
+    row = 2
+    for seq, intf in enumerate(interfaces, 1):
+        is_dis = (intf.get('status') == 'down')
+        b_fill, b_font = get_cell_style('base', seq, is_dis)
+        s_fill, s_font = get_cell_style('src', seq, is_dis)
+
+        status_str = 'DOWN' if is_dis else 'UP'
+        pip_val = intf.get('display') or '0.0.0.0/0'
+        sec_ips_str = '\n'.join(intf.get('secondary_ips', [])) if intf.get('secondary_ips') else None
+        remote_ip_str = intf.get('remote-ip') or None
+        if intf.get('member'):
+            parent_member_str = ', '.join(intf.get('member', []))
+        elif intf.get('interface'):
+            parent_member_str = intf.get('interface')
+        else:
+            parent_member_str = None
+        vrf_val = intf.get('vrf')
+        vrf_str = str(vrf_val) if vrf_val is not None and str(vrf_val).strip() != '' else '0'
+
+        sc(ws, row, 1, seq, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 2, vdom_name, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 3, status_str, font=DENY_FONT if is_dis else ACCEPT_FONT, fill=b_fill, align=CENTER)
+        sc(ws, row, 4, intf.get('name', ''), font=FONT_DEFAULT_BOLD, fill=b_fill)
+        sc(ws, row, 5, intf.get('alias', ''), font=b_font, fill=b_fill)
+        sc(ws, row, 6, intf.get('type', ''), font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 7, pip_val, font=s_font, fill=s_fill, align=CENTER)
+        sc(ws, row, 8, sec_ips_str, font=s_font, fill=s_fill, align=CENTER)
+        sc(ws, row, 9, remote_ip_str, font=s_font, fill=s_fill, align=CENTER)
+        sc(ws, row, 10, intf.get('vlanid', '') or None, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 11, parent_member_str, font=b_font, fill=b_fill, align=CENTER if parent_member_str else None)
+        sc(ws, row, 12, vrf_str, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 13, intf.get('mode', '') or None, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 14, intf.get('allowaccess', '') or None, font=b_font, fill=b_fill)
+        sc(ws, row, 15, format_interface_speed(intf.get('speed', '')) or None, font=b_font, fill=b_fill, align=CENTER)
+        sc(ws, row, 16, intf.get('description', '') or None, font=b_font, fill=b_fill)
+        row += 1
+
+    auto_fit(ws)
+    return ws
+
+
+# ================================================================
+# 17. 개별 vDOM 엑셀 생성 함수 / Per-vDOM Excel Generation Function
+# ================================================================
+
+def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None, static_routes=None, policy_routes=None, ospf_data=None, vpn_data=None, interfaces=None, acl_pols=None):
     wb = Workbook()
 
     # 1. 요약 시트 / Summary Sheet
@@ -2143,6 +3533,12 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
         ("Central-NAT", len(cn_ents)),
         ("DNAT (VIP)", len(dn_ents)),
         ("DoS Policy", len(dos_pols)),
+        ("ACL Policy", len(acl_pols) if acl_pols else 0),
+        ("Static Route", len(static_routes) if static_routes else 0),
+        ("Policy Route", len(policy_routes) if policy_routes else 0),
+        ("OSPF Networks", len(ospf_data.get('networks', [])) if ospf_data else 0),
+        ("IPsec VPN (P1)", len(vpn_data) if vpn_data else 0),
+        ("Network Interfaces", len(interfaces) if interfaces else 0),
         ("External Resources", len(ext_resources) if ext_resources else 0),
         ("Address Objects", obj_counts[0]),
         ("Address Groups", obj_counts[1]),
@@ -2181,11 +3577,35 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
     ws_dos = wb.create_sheet("DoS Policy")
     write_dos_sheet(ws_dos, dos_pols, resolver, vdom_name)
 
-    # 7. 외부 리소스 시트 / External Resource Sheet
+    # 7. ACL 정책 시트 / ACL Policy Sheet
+    ws_acl = wb.create_sheet("ACL Policy")
+    write_acl_sheet(ws_acl, acl_pols or [], resolver, vdom_name)
+
+    # 7. 정적 라우팅 시트 / Static Route Sheet
+    ws_sr = wb.create_sheet("Static Route")
+    write_static_route_sheet(ws_sr, static_routes or [], vdom_name)
+
+    # 8. 정책 라우팅 시트 / Policy Route Sheet
+    ws_pr = wb.create_sheet("Policy Route")
+    write_policy_route_sheet(ws_pr, policy_routes or [], resolver, vdom_name)
+
+    # 9. OSPF 동적 라우팅 시트 / OSPF Sheet
+    ws_ospf = wb.create_sheet("OSPF")
+    write_ospf_sheet(ws_ospf, ospf_data or {}, vdom_name)
+
+    # 10. IPsec VPN 시트 / IPsec VPN Sheet
+    ws_vpn = wb.create_sheet("IPsec VPN")
+    write_ipsec_vpn_sheet(ws_vpn, vpn_data or [], resolver, vdom_name)
+
+    # 11. 네트워크 인터페이스 시트 / Network Interface Sheet
+    ws_intf = wb.create_sheet("Network Interface")
+    write_interface_sheet(ws_intf, interfaces or [], vdom_name)
+
+    # 12. 외부 리소스 시트 / External Resource Sheet
     ws_ext = wb.create_sheet("External Resource")
     write_external_resource_sheet(ws_ext, ext_resources or {}, vdom_name)
 
-    # 8. 내용 없는 빈 시트 탭 색상 빨간색으로 지정 / Highlight empty sheet tabs with red
+    # 13. 내용 없는 빈 시트 탭 색상 빨간색으로 지정 / Highlight empty sheet tabs with red
     check_and_mark_empty_sheet_tabs(wb, TAB_COLOR_EMPTY)
 
     wb.save(filepath)
@@ -2831,7 +4251,7 @@ def get_fortinet_icon_path():
 class FortiGateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FortiGate Policy to Excel Exporter  v1.3")
+        self.root.title("FortiGate Policy to Excel Exporter  v1.5")
         self.root.minsize(860, 480)
         self.root.configure(bg=C_BG_APP)
 
@@ -3058,9 +4478,11 @@ class FortiGateGUI:
             text="● Ready",
             font=('Segoe UI', 10),
             fg=C_STATUSBAR_FG,
-            bg=C_STATUSBAR_BG
+            bg=C_STATUSBAR_BG,
+            anchor='w',
+            justify=tk.LEFT
         )
-        self.status_lbl.pack(side=tk.LEFT, padx=10, pady=3)
+        self.status_lbl.pack(side=tk.LEFT, padx=10, pady=3, anchor=tk.W)
 
         status_right = tk.Label(
             status_bar,
@@ -3486,7 +4908,7 @@ class FortiGateGUI:
 
     def _set_status(self, text, progress_pct=None):
         def update():
-            self.status_lbl.config(text=text)
+            self.status_lbl.config(text=text, anchor='w')
             if progress_pct is not None:
                 self.progressbar['value'] = progress_pct
         self.root.after(0, update)
@@ -3549,6 +4971,7 @@ class FortiGateGUI:
             all_sched_recur = parse_schedule_recurring(lines, 0, len(lines)-1)
             all_sched_onetime = parse_schedule_onetime(lines, 0, len(lines)-1)
             all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
+            all_vdom_interfaces = parse_system_interfaces(lines)
 
             # 3. vDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per vDOM & Generate Individual Excel Files
             summary_list = []
@@ -3610,7 +5033,21 @@ class FortiGateGUI:
                 for sr, er in find_section_range(lines, vs, ve, "firewall DoS-policy"):
                     dos_pols.extend(parse_dos_policy(lines, sr, er))
 
-                counts = [len(fw_pols), len(li_pols), len(cn_ents), len(dn_ents), len(dos_pols)]
+                acl_pols = []
+                for sr, er in find_section_range(lines, vs, ve, "firewall acl"):
+                    acl_pols.extend(parse_firewall_acl(lines, sr, er))
+
+                static_routes = parse_router_static(lines, vs, ve)
+                policy_routes = parse_router_policy(lines, vs, ve)
+                ospf_data = parse_router_ospf(lines, vs, ve)
+                vpn_data = parse_ipsec_vpn(lines, vs, ve)
+                vdom_interfaces = all_vdom_interfaces.get(vdom_name, [])
+
+                counts = [
+                    len(fw_pols), len(li_pols), len(cn_ents), len(dn_ents), len(dos_pols), len(acl_pols),
+                    len(static_routes), len(policy_routes), len(ospf_data.get('networks', [])), len(vpn_data),
+                    len(vdom_interfaces)
+                ]
                 summary_list.append((vdom_name, counts))
 
                 clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
@@ -3619,8 +5056,14 @@ class FortiGateGUI:
                                          resolver, obj_counts, vdom_file_path,
                                          profile_comments=all_profile_comments,
                                          vdom_inspection_mode=vdom_insp_mode,
-                                         ext_resources=merged_ext_res)
-                self._log(f"    -> [SUCCESS] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]})")
+                                         ext_resources=merged_ext_res,
+                                         static_routes=static_routes,
+                                         policy_routes=policy_routes,
+                                         ospf_data=ospf_data,
+                                         vpn_data=vpn_data,
+                                         interfaces=vdom_interfaces,
+                                         acl_pols=acl_pols)
+                self._log(f"    -> [SUCCESS] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]}, ACL: {counts[5]}, StaticRt: {counts[6]}, PolicyRt: {counts[7]}, OSPF: {counts[8]}, IPsec: {counts[9]}, Intf: {counts[10]})")
 
             # 4. 전체 요약 엑셀 생성 / 4. Generate Total Summary Excel
             self._set_status("⟳ Building total summary workbook...", 95)
@@ -3629,7 +5072,9 @@ class FortiGateGUI:
             ws_tot = wb_tot.active
             ws_tot.title = "vDOM Total Summary"
             tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
-                           "Central-NAT", "DNAT (VIP)", "DoS Policy",
+                           "Central-NAT", "DNAT (VIP)", "DoS Policy", "ACL Policy",
+                           "Static Route", "Policy Route", "OSPF Networks", "IPsec VPN",
+                           "Network Interfaces",
                            "Address Objects", "Addr Groups",
                            "Service Objects", "Svc Groups", "IP Pools",
                            "Sched Recurring", "Sched Onetime", "Sched Groups"]
@@ -3649,8 +5094,8 @@ class FortiGateGUI:
             sc(ws_tot, tr, 1, "Total", font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
             for col in range(2, len(tot_headers) + 1):
                 total = sum(
-                    (summary_list[r][1][col - 2] if col <= 6 else
-                     vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 7])
+                    (summary_list[r][1][col - 2] if col <= 12 else
+                     vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 13])
                     for r in range(len(summary_list))
                 )
                 sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
@@ -3742,6 +5187,7 @@ def run_cli(config_file=None, base_dir=None):
     all_sched_recur = parse_schedule_recurring(lines, 0, len(lines)-1)
     all_sched_onetime = parse_schedule_onetime(lines, 0, len(lines)-1)
     all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
+    all_vdom_interfaces = parse_system_interfaces(lines)
 
     summary_list = []
     vdom_obj_counts = {}
@@ -3800,7 +5246,21 @@ def run_cli(config_file=None, base_dir=None):
         for sr, er in find_section_range(lines, vs, ve, "firewall DoS-policy"):
             dos_pols.extend(parse_dos_policy(lines, sr, er))
 
-        counts = [len(fw_pols), len(li_pols), len(cn_ents), len(dn_ents), len(dos_pols)]
+        acl_pols = []
+        for sr, er in find_section_range(lines, vs, ve, "firewall acl"):
+            acl_pols.extend(parse_firewall_acl(lines, sr, er))
+
+        static_routes = parse_router_static(lines, vs, ve)
+        policy_routes = parse_router_policy(lines, vs, ve)
+        ospf_data = parse_router_ospf(lines, vs, ve)
+        vpn_data = parse_ipsec_vpn(lines, vs, ve)
+        vdom_interfaces = all_vdom_interfaces.get(vdom_name, [])
+
+        counts = [
+            len(fw_pols), len(li_pols), len(cn_ents), len(dn_ents), len(dos_pols), len(acl_pols),
+            len(static_routes), len(policy_routes), len(ospf_data.get('networks', [])), len(vpn_data),
+            len(vdom_interfaces)
+        ]
         summary_list.append((vdom_name, counts))
 
         clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
@@ -3809,8 +5269,14 @@ def run_cli(config_file=None, base_dir=None):
                                  resolver, obj_counts, vdom_file_path,
                                  profile_comments=all_profile_comments,
                                  vdom_inspection_mode=vdom_insp_mode,
-                                 ext_resources=merged_ext_res)
-        print(f"    -> [Saved] {clean_vdom_filename} (Policy:{counts[0]}, LocalIn:{counts[1]}, CNAT:{counts[2]}, VIP:{counts[3]}, DoS:{counts[4]})")
+                                 ext_resources=merged_ext_res,
+                                 static_routes=static_routes,
+                                 policy_routes=policy_routes,
+                                 ospf_data=ospf_data,
+                                 vpn_data=vpn_data,
+                                 interfaces=vdom_interfaces,
+                                 acl_pols=acl_pols)
+        print(f"    -> [Saved] {clean_vdom_filename} (Policy:{counts[0]}, LocalIn:{counts[1]}, CNAT:{counts[2]}, VIP:{counts[3]}, DoS:{counts[4]}, ACL:{counts[5]}, StaticRt:{counts[6]}, PolicyRt:{counts[7]}, OSPF:{counts[8]}, IPsec:{counts[9]}, Intf:{counts[10]})")
 
     # 전체 vDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / Generate Total Summary Excel Across All vDOMs (_TOTAL_SUMMARY.xlsx)
     total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
@@ -3818,7 +5284,9 @@ def run_cli(config_file=None, base_dir=None):
     ws_tot = wb_tot.active
     ws_tot.title = "vDOM Total Summary"
     tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
-                   "Central-NAT", "DNAT (VIP)", "DoS Policy",
+                   "Central-NAT", "DNAT (VIP)", "DoS Policy", "ACL Policy",
+                   "Static Route", "Policy Route", "OSPF Networks", "IPsec VPN",
+                   "Network Interfaces",
                    "Address Objects", "Addr Groups",
                    "Service Objects", "Svc Groups", "IP Pools",
                    "Sched Recurring", "Sched Onetime", "Sched Groups"]
@@ -3838,8 +5306,8 @@ def run_cli(config_file=None, base_dir=None):
     sc(ws_tot, tr, 1, "Total", font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
     for col in range(2, len(tot_headers) + 1):
         total = sum(
-            (summary_list[r][1][col - 2] if col <= 6 else
-             vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 7])
+            (summary_list[r][1][col - 2] if col <= 12 else
+             vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 13])
             for r in range(len(summary_list))
         )
         sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
@@ -3848,23 +5316,24 @@ def run_cli(config_file=None, base_dir=None):
     wb_tot.save(total_summary_path)
     print(f"\n[OK] Total Summary Saved: {total_summary_path}")
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 125)
     print(f"  FortiGate [{hostname}] vDOM Export Summary")
-    print("=" * 80)
-    fmt = "  {:<20} {:>8} {:>8} {:>8} {:>8} {:>8}  | {:>5} {:>5} {:>5} {:>5} {:>5}"
-    print(fmt.format("vDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS",
+    print("=" * 125)
+    fmt = "  {:<20} {:>7} {:>7} {:>6} {:>5} {:>4} {:>4} {:>8} {:>8} {:>5} {:>6} {:>6} | {:>5} {:>5} {:>5} {:>5} {:>5}"
+    print(fmt.format("vDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS", "ACL", "StaticRt", "PolicyRt", "OSPF", "IPsec", "Intf",
                       "Addr", "AGrp", "Svc", "SGrp", "Pool"))
-    print("-" * 80)
-    totals = [0] * 10
+    print("-" * 125)
+    totals = [0] * 16
     for vdom, counts in summary_list:
         oc = vdom_obj_counts.get(vdom, [0]*5)
-        print(fmt.format(vdom, *counts, *oc))
-        for i in range(5):
+        print(fmt.format(vdom, *counts, *oc[:5]))
+        for i in range(11):
             totals[i] += counts[i]
-            totals[i + 5] += oc[i]
-    print("-" * 80)
+        for i in range(5):
+            totals[11 + i] += oc[i]
+    print("-" * 125)
     print(fmt.format("Total", *totals))
-    print("=" * 80)
+    print("=" * 125)
     print(f"\n[Finished] All {len(vdom_sections)} vDOM Excel files created in directory: '{target_dir}'")
 
 
@@ -3873,7 +5342,7 @@ def main():
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
         run_gui()
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
-        print("FortiGate Policy to Excel Exporter v1.3")
+        print("FortiGate Policy to Excel Exporter v1.5")
         print("Usage:")
         print("  GUI Mode : python fortigate_policy_to_excel.py [--gui]")
         print("  CLI Mode : python fortigate_policy_to_excel.py <config_file> [output_dir]")
