@@ -20,12 +20,17 @@
 
 ## 🌟 주요 기능
 
-### 1. 6대 핵심 정책 및 설정 완벽 추출 (개별 시트 분리 저장)
+### 1. 11대 핵심 정책, 라우팅, VPN 및 인터페이스 설정 완벽 추출 (개별 시트 분리 저장)
 * **Firewall Policy** : 일반 방화벽 정책 (Action, Schedule, NAT, IP Pool, Inspection Mode, UTM Profile, Log 등 33개 상세 열 수록)
 * **Local-in Policy** : 방화벽 장비 자체 접근 제어 정책
 * **Central-NAT** : Central SNAT Map (Original IP/Port ↔ Translated IP/Port 매핑, NAT 기본 활성화 상태 표기)
 * **DNAT (VIP)** : 가상 IP 및 포트포워딩 매핑 (External IP/Port ↔ Mapped IP/Port)
 * **DoS Policy** : 서비스 거부 공격(DoS/DDoS) 방어 정책
+* **Static Route** : 정적 라우팅 설정 (Destination 대역 CIDR 자동 변환, Gateway, Interface, Distance, Priority, 특수 플래그, 비활성화 음영 수록)
+* **Policy Route** : 정책 기반 라우팅(PBR) (Incoming/Outgoing Interface, Gateway, Action, Protocol, Port Range, 주소 객체 다중 행 전개 및 셀 병합)
+* **OSPF** : OSPF 동적 라우팅 설정 (Global Settings/Router ID, config network, config ospf-interface, config redistribute, Route-Map & Access-List 필터 세부 규칙 구조화 섹션 테이블)
+* **IPsec VPN** : IPsec VPN Phase 1 및 Phase 2 터널 설정 (P1 vs P2 헤더 색상 구분, 1:N 터널 계층 연계, Proposal/암호화, P2 DH Group 및 기본값 '14 5' 자동 보정, 로컬/원격 서브넷 기본값 '0.0.0.0/0' 자동 보정, 병합 셀 중앙 정렬 수록)
+* **Network Interface** : VDOM별 물리/VLAN/루프백/애그리게이션 인터페이스 설정 (`config system interface` 분석, Status UP/DOWN 상태, Name, Alias, Type, IP/Subnet, VLAN ID, Parent Interface, VRF, Mode, Admin Access, Speed, Description 등 14개 열)
 * **External Resource** : 외부 위협 인텔리전스 피드(`config system external-resource`) 객체 (활성화 여부, 리소스 URL, 갱신 주기, IP 등)
 
 ### 2. 객체/그룹의 실제 IP·포트·코멘트 다중 행 전개 (Multi-row Flattening)
@@ -324,7 +329,180 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 26: Comment            - DoS 정책 코멘트
 ```
 
-### 6. External Resource 시트 컬럼 구성 (9개 열)
+### 6. ACL Policy 시트 컬럼 구성 (20개 열)
+
+```
+[정책 기본 정보]
+  Col 1: Seq                 - 시퀀스 번호
+  Col 2: VDOM                - VDOM 명
+  Col 3: Enable              - 활성화 여부 (Y / N, status disable 시 N 및 진한 회색 음영)
+  Col 4: ID                  - ACL 규칙 ID (edit 번호)
+  Col 5: Interface           - 인바운드 수신 인터페이스
+
+[출발지 영역 (Src) - 파란색 계열]
+  Col 6: Src Group OBJ       - 출발지 그룹명 (그룹 객체 포함 시 자동 전개)
+  Col 7: Src OBJ Name        - 출발지 세부 객체명
+  Col 8: Src Type            - 주소 객체 타입 (ipmask / geography 등)
+  Col 9: Src IP              - 실제 출발지 IP 대역
+  Col 10: Src Comment        - 출발지 객체 코멘트
+
+[목적지 영역 (Dst) - 빨간색 계열]
+  Col 11: Dst Group OBJ      - 목적지 그룹명
+  Col 12: Dst OBJ Name       - 목적지 세부 객체명
+  Col 13: Dst Type           - 주소 객체 타입
+  Col 14: Dst IP             - 실제 목적지 IP 대역
+  Col 15: Dst Comment        - 목적지 객체 코멘트
+
+[서비스 영역 (Service)]
+  Col 16: Svc Group OBJ      - 서비스 그룹명
+  Col 17: Svc OBJ Name       - 서비스 객체명
+  Col 18: Svc Port           - 서비스 포트
+  Col 19: Svc Comment        - 서비스 객체 코멘트
+
+[정책 코멘트]
+  Col 20: Comment            - ACL 정책 코멘트
+※ firewall acl에 설정된 다중 주소 객체 및 그룹 객체를 완벽히 행 분리하여 풀어서 표기합니다.
+```
+
+### 7. Static Route 시트 컬럼 구성 (11개 열)
+
+```
+[라우팅 기본 정보]
+  Col 1: Seq                 - 시퀀스 번호
+  Col 2: VDOM                - VDOM 명
+  Col 3: Enable              - 활성화 여부 (Y / N, status disable 시 N 및 진한 회색 음영 처리)
+  Col 4: ID                  - Static Route ID (edit 번호)
+
+[목적지 및 경로]
+  Col 5: Destination         - 목적지 네트워크 대역 (IP/CIDR 자동 변환, 미지정 시 0.0.0.0/0)
+  Col 6: Gateway             - 게이트웨이 IP 주소
+  Col 7: Interface           - 아웃바운드 인터페이스 (device)
+
+[메트릭 및 옵션]
+  Col 8: Distance            - 관리 거리 (기본값 10)
+  Col 9: Priority            - 우선순위 (Priority)
+  Col 10: Options            - 특수 플래그 요약 (Blackhole, Dynamic-GW, BFD, Link-Mon-Exempt)
+  Col 11: Comment            - 라우트 코멘트
+```
+
+### 8. Policy Route 시트 컬럼 구성 (21개 열)
+
+```
+[정책 라우팅 기본 정보]
+  Col 1: Seq                 - 시퀀스 번호
+  Col 2: VDOM                - VDOM 명
+  Col 3: Enable              - 활성화 여부 (Y / N, disable 시 N 및 진한 회색 음영)
+  Col 4: ID                  - 정책 라우팅 ID
+  Col 5: Incoming Intf       - 인바운드 수신 인터페이스 (input-device)
+  Col 6: Outgoing Intf       - 아웃바운드 송신 인터페이스 (output-device)
+  Col 7: Gateway             - 게이트웨이 IP 주소
+  Col 8: Action              - permit / deny
+  Col 9: Protocol            - ALL / TCP(6) / UDP(17) / ICMP(1) 등
+  Col 10: Port Range         - 포트 범위 (start-port ~ end-port, 미지정 시 ALL)
+
+[출발지 영역 (Src)]
+  Col 11: Src Group OBJ      - 출발지 그룹명
+  Col 12: Src OBJ Name       - 세부 객체명 (주소 객체 / 그룹 / 직접 지정 서브넷)
+  Col 13: Src Type           - 객체 타입 (ipmask / fqdn 등)
+  Col 14: Src IP             - 실제 출발지 IP 대역 (객체 추적 자동 전개)
+  Col 15: Src Comment        - 출발지 객체 코멘트
+
+[목적지 영역 (Dst)]
+  Col 16: Dst Group OBJ      - 목적지 그룹명
+  Col 17: Dst OBJ Name       - 세부 객체명
+  Col 18: Dst Type           - 객체 타입
+  Col 19: Dst IP             - 실제 목적지 IP 대역 (객체 추적 자동 전개)
+  Col 20: Dst Comment        - 목적지 객체 코멘트
+
+[기타]
+  Col 21: Comment            - 정책 라우팅 코멘트
+```
+
+### 9. OSPF 시트 구조 (5개 계층 섹션 테이블)
+
+```
+[1. OSPF Global Settings]
+  - vDOM, Router ID, Total Networks, Total Interfaces, Total Areas
+[2. OSPF Networks (config network)]
+  - Seq, ID, Prefix (IP/CIDR), Area ID
+[3. OSPF Interfaces (config ospf-interface)]
+  - Seq, Name, Interface, Cost, Dead / Hello Interval, Network Type, Priority (기본값 1), Authentication (기본값 none)
+[4. OSPF Redistribution (config redistribute)]
+  - Seq, Protocol (Connected, Static, RIP, BGP, ISIS), Status, Route-Map, Metric, Metric Type
+[5. Route-Map & Filter Details (config router route-map / access-list)]
+  - Seq, Route-Map, Rule, Route-Map Action (PERMIT/DENY), Match Target, Filtered Prefix (규칙별 행 분리), Action (permit/deny), Exact Match (enable/disable), ACL Comment
+※ OSPF 미설정 VDOM은 헤더만 표시되며 엑셀 탭 색상이 빨간색(Red)으로 자동 마킹됩니다.
+※ 각 섹션 제목 배경색은 실제 표 열 너비(5열, 4열, 8열, 6열, 9열)에 정확히 맞춰져 가독성을 극대화합니다.
+```
+
+### 10. IPsec VPN 시트 컬럼 구성 (30개 열)
+
+```
+[공통 정보 - 기본 헤더 (#2F5496)]
+  Col 1: Seq                 - 시퀀스 번호 (중앙 정렬 병합)
+  Col 2: vDOM                - VDOM 명 (중앙 정렬 병합)
+
+[Phase 1 터널 및 네트워크/고급 설정 - 네이비 블루 헤더 (#1F4E78)]
+  Col 3: P1 Name             - Phase 1 터널 이름 (좌측 정렬 병합)
+  Col 4: Interface           - 물리 바인딩 인터페이스 (중앙 정렬 병합)
+  Col 5: Remote Gateway      - 상대방 공인 IP / (Dialup/Dynamic) (중앙 정렬 병합)
+  Col 6: Local Gateway       - 로컬 바인딩 IP (중앙 정렬 병합)
+  Col 7: IKE Version         - IKE 버전 (v1 / v2) (중앙 정렬 병합)
+  Col 8: P1 Proposal         - 1단계 암호화/인증 알고리즘 (좌측 정렬 병합)
+  Col 9: P1 DH Group         - Phase 1 Diffie-Hellman 그룹 (미지정 시 기본값 '14 5' 자동 기입)
+  Col 10: NAT Traversal      - NAT 트래버설 (기본값 enable)
+  Col 11: Keepalive Frequency- Keepalive 주기 (초 단위, 기본값 10)
+  Col 12: Dead Peer Detection- DPD 모드 (disable / on-idle / on-demand, 기본값 on-demand)
+  Col 13: DPD Retry Count    - DPD 재시도 횟수 (기본값 3)
+  Col 14: DPD Retry Interval - DPD 재시도 간격 (초 단위 숫자만 표기, 기본값 20)
+  Col 15: FEC Egress         - 순방향 오류 정정 송신 (기본값 disable)
+  Col 16: FEC Ingress        - 순방향 오류 정정 수신 (기본값 disable)
+  Col 17: Add Route          - 게이트웨이 경로 자동 추가 (add-gw-route, 기본값 enable)
+  Col 18: Auto Discovery Sender   - 동적 터널 발신 탐색 (기본값 disable)
+  Col 19: Auto Discovery Receiver - 동적 터널 수신 탐색 (기본값 disable)
+  Col 20: Exchange Interface IP   - 인터페이스 IP 교환 (기본값 disable)
+  Col 21: Device Creation    - 터널 가상 인터페이스 생성 (net-device, 기본값 disable)
+  Col 22: P1 Comment         - Phase 1 코멘트 (좌측 정렬 병합)
+
+[Phase 2 서브 터널 정보 - 다크 틸 그린 헤더 (#2A5C5A)]
+  Col 23: P2 Name            - Phase 2 서브 터널 이름
+  Col 24: P2 Proposal        - 2단계 암호화/인증 알고리즘
+  Col 25: P2 DH Group        - Phase 2 Diffie-Hellman 그룹 (미지정 시 기본값 '14 5' 자동 기입)
+  Col 26: Local Subnet / Src - 로컬 서브넷 대역 또는 주소 객체명 (미지정 시 기본값 '0.0.0.0/0' 자동 기입)
+  Col 27: Remote Subnet / Dst- 원격 서브넷 대역 또는 주소 객체명 (미지정 시 기본값 '0.0.0.0/0' 자동 기입)
+  Col 28: Auto Negotiate     - 자동 협상 활성화 여부 (enable / disable)
+  Col 29: Keepalive          - Keepalive 활성화 여부 (enable / disable)
+  Col 30: P2 Comment         - Phase 2 코멘트
+※ 데이터 길이에 비해 헤더명이 긴 컬럼은 2줄 줄바꿈을 적용하여 열 너비를 최적화하고 가독성을 극대화했습니다.
+```
+
+### 11. Network Interface 시트 컬럼 구성 (16개 열)
+
+```
+[인터페이스 기본 정보]
+  Col 1: Seq                 - 시퀀스 번호
+  Col 2: vDOM                - VDOM 명
+  Col 3: Status              - 인터페이스 활성화 상태 (UP / DOWN, DOWN 시 빨간색 음영)
+  Col 4: Name                - 인터페이스 식별 이름 (굵은 글씨)
+  Col 5: Alias               - 인터페이스 별칭(Alias)
+  Col 6: Type                - 인터페이스 타입 (physical, vlan, loopback, aggregate, tunnel 등)
+
+[네트워크 주소 및 계층 바인딩]
+  Col 7: Primary IP          - 기본 할당 IP 주소 및 서브넷 마스크 (미지정 시 기본값 '0.0.0.0/0' 자동 기입, 파란색 글씨)
+  Col 8: Secondary IP        - 2차 보조 IP 대역 (config secondaryip 파싱, 2개 이상 시 줄바꿈)
+  Col 9: Remote IP (Tunnel)  - 터널 대향 IP 대역 (tunnel 인터페이스의 set remote-ip 파싱)
+  Col 10: VLAN ID            - VLAN 태그 번호
+  Col 11: Parent / Member Interface - 상위 부모 인터페이스(VLAN/터널) 또는 하위 멤버 목록(어그리게이트/리던던트) 통합 표기
+  Col 12: VRF                - 할당된 VRF ID (미지정 시 기본값 '0' 자동 기입)
+  Col 13: Addressing Mode    - 주소 할당 방식 (static, dhcp, pppoe 등)
+
+[보안 및 상세 관리]
+  Col 14: Administrative Access - 허용된 관리 접근 프로토콜 (ping, https, ssh, snmp, fgfm 등)
+  Col 15: Speed / Duplex     - 링크 속도 및 듀플렉스 설정 (1000 / auto, 10000 / full 등으로 가독성 최적화)
+  Col 16: Description        - 인터페이스 설명(설정 코멘트)
+```
+
+### 12. External Resource 시트 컬럼 구성 (9개 열)
 
 ```
   Col 1: Seq                 - 시퀀스 번호
@@ -346,14 +524,13 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 fortigate_policy_to_excel/
 │
 ├── fortigate_policy_to_excel.py   # [핵심] 변환 엔진 및 GUI 통합 단일 스크립트
-├── README.md                      # [문서] 사용자 매뉴얼 및 가이드
-├── start.bat                      # [실행] Windows 간편 실행 배치 스크립트
+├── README_ko.md                   # [문서] 한국어 사용자 매뉴얼 및 가이드
+├── README_en.md                   # [문서] 영문 사용자 매뉴얼 및 가이드
+├── Start.bat                      # [실행] Windows 간편 실행 배치 스크립트
 │
 └── <호스트네임>/                  # [결과물] 변환 완료 시 생성되는 결과 디렉토리
-    ├── _TOTAL_SUMMARY.xlsx        # 전체 VDOM 정책 및 객체 수 집계 총괄 요약
-    ├── root.xlsx                  # root VDOM 엑셀 (6대 핵심 시트 분리)
-    ├── DMZ.xlsx                   # DMZ VDOM 엑셀
-    ├── IDC.xlsx                   # IDC VDOM 엑셀
+    ├── _TOTAL_SUMMARY.xlsx        # 전체 VDOM 정책·라우팅·VPN·인터페이스·객체 수 집계 총괄 요약
+    ├── root.xlsx                  # root VDOM 엑셀
     └── ...                        # 각 VDOM별 독립 엑셀 파일들
 ```
 
