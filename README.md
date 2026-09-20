@@ -20,12 +20,17 @@ A tool that parses FortiGate firewall backup configuration files (`.conf`) and a
 
 ## 🌟 Key Features
 
-### 1. Comprehensive Extraction & Dedicated Sheets for 6 Core Policies & Configs
+### 1. Comprehensive Extraction & Dedicated Sheets for 11 Core Policies, Routing, VPN & Interface Configs
 * **Firewall Policy**: Standard firewall policies (Action, Schedule, NAT, IP Pool, Inspection Mode, UTM Profile, Log, etc. with 33 detailed columns)
 * **Local-in Policy**: Firewall appliance self-access control policies
 * **Central-NAT**: Central SNAT Map (Original IP/Port ↔ Translated IP/Port mapping, explicit NAT enable status)
 * **DNAT (VIP)**: Virtual IP and port-forwarding mapping (External IP/Port ↔ Mapped IP/Port)
 * **DoS Policy**: Denial of Service (DoS/DDoS) defense policies
+* **Static Route**: Static routing entries (Destination network with automatic CIDR conversion, Gateway, Interface, Distance, Priority, special flags, and disabled row shading)
+* **Policy Route**: Policy-Based Routing (PBR) (Incoming/Outgoing Interface, Gateway, Action, Protocol, Port Range, address objects multi-row flattening & cell merging)
+* **OSPF**: Dynamic OSPF routing configuration (Structured section tables for Global Settings/Router ID, config network, config ospf-interface, config redistribute, and Route-Map & Access-List Filter Details)
+* **IPsec VPN**: IPsec VPN Phase 1 and Phase 2 tunnel configurations (P1 vs P2 header color distinction, 1:N hierarchical tunnel mapping, Proposals, P2 DH Group default '14 5', local/remote subnets default '0.0.0.0/0', and center-aligned merged cells)
+* **Network Interface**: Network interface configurations per VDOM parsed from `config system interface` (Status UP/DOWN, Name, Alias, Type, IP/Subnet, VLAN ID, Parent Interface, VRF, Mode, Admin Access, Speed, Description with 14 columns)
 * **External Resource**: External threat intelligence feeds (`config system external-resource`) with URL, refresh rate, source IP, enabled status, etc.
 
 ### 2. Multi-row Object/Group Expansion with Real IPs, Ports & Comments (Multi-row Flattening)
@@ -324,7 +329,180 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 26: Comment            - DoS policy comments
 ```
 
-### 6. External Resource Sheet Column Structure (9 Columns)
+### 6. ACL Policy Sheet Column Structure (20 Columns)
+
+```
+[Policy Basic Info]
+  Col 1: Seq                 - Sequence number
+  Col 2: VDOM                - VDOM name
+  Col 3: Enable              - Enabled status (Y / N, N and dark gray shaded if disabled)
+  Col 4: ID                  - ACL Rule ID (edit number)
+  Col 5: Interface           - Inbound receiving interface
+
+[Source Columns (Src) - Blue Style]
+  Col 6: Src Group OBJ       - Source group name (Recursively resolved when group objects are present)
+  Col 7: Src OBJ Name        - Source object name
+  Col 8: Src Type            - Address object type (ipmask / geography, etc.)
+  Col 9: Src IP              - Resolved source IP subnet / range
+  Col 10: Src Comment        - Source object comment
+
+[Destination Columns (Dst) - Red Style]
+  Col 11: Dst Group OBJ      - Destination group name
+  Col 12: Dst OBJ Name       - Destination object name
+  Col 13: Dst Type           - Address object type
+  Col 14: Dst IP             - Resolved destination IP subnet / range
+  Col 15: Dst Comment        - Destination object comment
+
+[Service Columns (Service)]
+  Col 16: Svc Group OBJ      - Service group name
+  Col 17: Svc OBJ Name       - Service object name
+  Col 18: Svc Port           - Service port
+  Col 19: Svc Comment        - Service object comment
+
+[Policy Comment]
+  Col 20: Comment            - ACL policy comment
+※ Multiple address objects and group members configured under firewall acl are completely expanded into individual rows with common columns merged.
+```
+
+### 7. Static Route Sheet Column Structure (11 Columns)
+
+```
+[Routing Basic Info]
+  Col 1: Seq                 - Sequence number
+  Col 2: VDOM                - VDOM name
+  Col 3: Enable              - Enabled status (Y / N, N and dark gray shaded if disabled)
+  Col 4: ID                  - Static Route ID (edit number)
+
+[Destination & Path]
+  Col 5: Destination         - Destination network (Auto-converted to IP/CIDR, 0.0.0.0/0 if omitted)
+  Col 6: Gateway             - Gateway IP address
+  Col 7: Interface           - Outbound interface (device)
+
+[Metric & Options]
+  Col 8: Distance            - Administrative distance (Default: 10)
+  Col 9: Priority            - Route priority
+  Col 10: Options            - Summary of special flags (Blackhole, Dynamic-GW, BFD, Link-Mon-Exempt)
+  Col 11: Comment            - Route comment
+```
+
+### 8. Policy Route Sheet Column Structure (21 Columns)
+
+```
+[Policy Route Basic Info]
+  Col 1: Seq                 - Sequence number
+  Col 2: VDOM                - VDOM name
+  Col 3: Enable              - Enabled status (Y / N, N and dark gray shaded if disabled)
+  Col 4: ID                  - Policy Route ID
+  Col 5: Incoming Intf       - Inbound receiving interface (input-device)
+  Col 6: Outgoing Intf       - Outbound transmitting interface (output-device)
+  Col 7: Gateway             - Gateway IP address
+  Col 8: Action              - permit / deny
+  Col 9: Protocol            - ALL / TCP(6) / UDP(17) / ICMP(1), etc.
+  Col 10: Port Range         - Port range (start-port ~ end-port, ALL if omitted)
+
+[Source Area (Src)]
+  Col 11: Src Group OBJ      - Source group name
+  Col 12: Src OBJ Name       - Detailed object name (Address / Group / Direct subnet)
+  Col 13: Src Type           - Object type (ipmask / fqdn, etc.)
+  Col 14: Src IP             - Actual source IP / Subnet (Recursively resolved)
+  Col 15: Src Comment        - Source object comment
+
+[Destination Area (Dst)]
+  Col 16: Dst Group OBJ      - Destination group name
+  Col 17: Dst OBJ Name       - Detailed object name
+  Col 18: Dst Type           - Object type
+  Col 19: Dst IP             - Actual destination IP / Subnet (Recursively resolved)
+  Col 20: Dst Comment        - Destination object comment
+
+[Other]
+  Col 21: Comment            - Policy route comment
+```
+
+### 9. OSPF Sheet Structure (5 Structured Section Tables)
+
+```
+[1. OSPF Global Settings]
+  - vDOM, Router ID, Total Networks, Total Interfaces, Total Areas
+[2. OSPF Networks (config network)]
+  - Seq, ID, Prefix (IP/CIDR), Area ID
+[3. OSPF Interfaces (config ospf-interface)]
+  - Seq, Name, Interface, Cost, Dead / Hello Interval, Network Type, Priority (Defaults to 1), Authentication (Defaults to none)
+[4. OSPF Redistribution (config redistribute)]
+  - Seq, Protocol (Connected, Static, RIP, BGP, ISIS), Status, Route-Map, Metric, Metric Type
+[5. Route-Map & Filter Details (config router route-map / access-list)]
+  - Seq, Route-Map, Rule, Route-Map Action (PERMIT/DENY), Match Target, Filtered Prefix (Per-rule row splitting), Action (permit/deny), Exact Match (enable/disable), ACL Comment
+※ Worksheets with unconfigured OSPF display header rows only and have their Excel tab automatically highlighted in Red.
+※ Section title banner fills strictly match the width of each underlying section table (5, 4, 8, 6, 9 columns) to ensure clean visual presentation.
+```
+
+### 10. IPsec VPN Sheet Column Structure (30 Columns)
+
+```
+[Common Info - Default Header (#2F5496)]
+  Col 1: Seq                 - Sequence number (Center aligned & merged)
+  Col 2: vDOM                - VDOM name (Center aligned & merged)
+
+[Phase 1 Tunnel & Network/Advanced Settings - Navy Blue Header (#1F4E78)]
+  Col 3: P1 Name             - Phase 1 tunnel name (Left aligned & merged)
+  Col 4: Interface           - Physical bound interface (Center aligned & merged)
+  Col 5: Remote Gateway      - Remote peer public IP / (Dialup/Dynamic) (Center aligned & merged)
+  Col 6: Local Gateway       - Local binding IP (Center aligned & merged)
+  Col 7: IKE Version         - IKE version (v1 / v2) (Center aligned & merged)
+  Col 8: P1 Proposal         - Phase 1 encryption/integrity proposals (Left aligned & merged)
+  Col 9: P1 DH Group         - Phase 1 Diffie-Hellman groups (Defaults to '14 5' if omitted in config)
+  Col 10: NAT Traversal      - NAT Traversal mode (Defaults to enable)
+  Col 11: Keepalive Frequency- Keepalive interval in seconds (Defaults to 10)
+  Col 12: Dead Peer Detection- DPD mode (disable / on-idle / on-demand, Defaults to on-demand)
+  Col 13: DPD Retry Count    - DPD retry count (Defaults to 3)
+  Col 14: DPD Retry Interval - DPD retry interval in seconds (Number only, Defaults to 20)
+  Col 15: FEC Egress         - Forward Error Correction Egress (Defaults to disable)
+  Col 16: FEC Ingress        - Forward Error Correction Ingress (Defaults to disable)
+  Col 17: Add Route          - Add gateway route automatically (add-gw-route, Defaults to enable)
+  Col 18: Auto Discovery Sender   - Dynamic tunnel sender discovery (Defaults to disable)
+  Col 19: Auto Discovery Receiver - Dynamic tunnel receiver discovery (Defaults to disable)
+  Col 20: Exchange Interface IP   - Exchange interface IP (Defaults to disable)
+  Col 21: Device Creation    - Tunnel virtual interface creation (net-device, Defaults to disable)
+  Col 22: P1 Comment         - Phase 1 comment (Left aligned & merged)
+
+[Phase 2 Child Tunnel Info - Dark Teal Header (#2A5C5A)]
+  Col 23: P2 Name            - Phase 2 child tunnel name
+  Col 24: P2 Proposal        - Phase 2 encryption/integrity proposals
+  Col 25: P2 DH Group        - Phase 2 Diffie-Hellman groups (Defaults to '14 5' if omitted in config)
+  Col 26: Local Subnet / Src - Local subnet or address object (Defaults to '0.0.0.0/0' if omitted)
+  Col 27: Remote Subnet / Dst- Remote subnet or address object (Defaults to '0.0.0.0/0' if omitted)
+  Col 28: Auto Negotiate     - Auto-negotiation status (enable / disable)
+  Col 29: Keepalive          - Keepalive status (enable / disable)
+  Col 30: P2 Comment         - Phase 2 comment
+※ Columns with short values but long titles use two-line headers to optimize column widths and readability.
+```
+
+### 11. Network Interface Sheet Column Structure (16 Columns)
+
+```
+[Interface Basic Info]
+  Col 1: Seq                 - Sequence number
+  Col 2: vDOM                - VDOM name
+  Col 3: Status              - Link status (UP / DOWN, highlighted in red if DOWN)
+  Col 4: Name                - Interface name (Bold)
+  Col 5: Alias               - Interface alias
+  Col 6: Type                - Interface type (physical, vlan, loopback, aggregate, tunnel, etc.)
+
+[Network Address & Hierarchy Binding]
+  Col 7: Primary IP          - Primary assigned IP address and subnet mask (Defaults to '0.0.0.0/0' if unconfigured, Blue font)
+  Col 8: Secondary IP        - Secondary IP subnet ranges (Parsed from config secondaryip, multi-line)
+  Col 9: Remote IP (Tunnel)  - Remote tunnel peer IP (Parsed from set remote-ip for tunnel interfaces)
+  Col 10: VLAN ID            - VLAN tag ID
+  Col 11: Parent / Member Interface - Physical parent interface (VLAN/Tunnel) or member interfaces (Aggregate/Redundant)
+  Col 12: VRF                - Assigned VRF ID (Defaults to '0' if omitted)
+  Col 13: Addressing Mode    - IP assignment mode (static, dhcp, pppoe, etc.)
+
+[Security & Management]
+  Col 14: Administrative Access - Allowed management access protocols (ping, https, ssh, snmp, fgfm, etc.)
+  Col 15: Speed / Duplex     - Port speed & duplex settings (1000 / auto, 10000 / full, etc. formatted for readability)
+  Col 16: Description        - Interface description / comment
+```
+
+### 12. External Resource Sheet Column Structure (9 Columns)
 
 ```
   Col 1: Seq                 - Sequence number
@@ -345,15 +523,14 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 ```
 fortigate_policy_to_excel/
 │
-├── fortigate_policy_to_excel.py   # [Core] Unified script containing the conversion engine and GUI
-├── README.md                      # [Docs] user manual and guide
-├── start.bat                      # [Run] Windows quick-start batch script
+├── fortigate_policy_to_excel.py   # [Core] Unified script containing conversion engine & GUI
+├── README_ko.md                   # [Docs] Korean user manual & guide
+├── README_en.md                   # [Docs] English user manual & guide
+├── Start.bat                      # [Run] Windows quick-start batch script
 │
 └── <hostname>/                    # [Output] Output directory created upon conversion
-    ├── _TOTAL_SUMMARY.xlsx        # Master summary of total policies and objects per VDOM
-    ├── root.xlsx                  # root VDOM workbook (6 core sheets separated)
-    ├── DMZ.xlsx                   # DMZ VDOM workbook
-    ├── IDC.xlsx                   # IDC VDOM workbook
+    ├── _TOTAL_SUMMARY.xlsx        # Master summary of total policies, routing, VPN, interfaces & objects per VDOM
+    ├── root.xlsx                  # root VDOM workbook
     └── ...                        # Independent Excel workbooks for each VDOM
 ```
 
