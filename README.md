@@ -2,7 +2,7 @@
 
 A tool that parses FortiGate firewall backup configuration files (`.conf`) and automatically converts and splits policies and objects by VDOM into highly readable Excel (`.xlsx`) workbooks.
 
-<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/01b1390f-9840-4ad8-abbe-5a12f589af31" />
+<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/5ece4552-d03f-4ed9-bd60-67843fd7078f" />
 
 
 ---
@@ -24,7 +24,7 @@ A tool that parses FortiGate firewall backup configuration files (`.conf`) and a
 * **Firewall Policy**: Standard firewall policies (Action, Schedule, NAT, IP Pool, Inspection Mode, UTM Profile, Log, etc. with 33 detailed columns)
 * **Local-in Policy**: Firewall appliance self-access control policies
 * **Central-NAT**: Central SNAT Map (Original IP/Port ↔ Translated IP/Port mapping, explicit NAT enable status)
-* **DNAT (VIP)**: Virtual IP and port-forwarding mapping (External IP/Port ↔ Mapped IP/Port)
+* **DNAT (VIP)**: Virtual IP and port-forwarding mapping (External IP/Port ↔ Mapped IP/Port, 4-column Service object resolution, ARP Reply, and NAT Source VIP status across 24 columns)
 * **DoS Policy**: Denial of Service (DoS/DDoS) defense policies
 * **Static Route**: Static routing entries (Destination network with automatic CIDR conversion, Gateway, Interface, Distance, Priority, special flags, and disabled row shading)
 * **Policy Route**: Policy-Based Routing (PBR) (Incoming/Outgoing Interface, Gateway, Action, Protocol, Port Range, address objects multi-row flattening & cell merging)
@@ -255,7 +255,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 21: Comment            - NAT rule comments
 ```
 
-### 4. DNAT (VIP) Sheet Column Structure (18 Columns)
+### 4. DNAT (VIP) Sheet Column Structure (24 Columns)
 
 ```
 [VIP Basic Information]
@@ -275,16 +275,26 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 10: External Port      - External port range (extport)
   Col 11: Mapped Port        - Internal mapped port range (mappedport)
 
+[Service Details Section (Service)]
+  Col 12: Svc Group OBJ      - Service group name (if included in a group)
+  Col 13: Svc OBJ Name       - Service object name
+  Col 14: Svc Port           - Resolved protocol and port number (e.g. TCP/80)
+  Col 15: Svc Comment        - Service object comment
+
+[ARP Reply & Source VIP Mapping]
+  Col 16: ARP Reply          - ARP reply status (defaults to enable if omitted)
+  Col 17: NAT Source VIP     - NAT source VIP status (defaults to disable if omitted)
+
 [Server Load Balancing (SLB)]
-  Col 12: Server Type        - Server type (http, https, ip, etc.)
-  Col 13: LDB Method         - Load balancing method (round-robin, weighted, etc.)
-  Col 14: Monitor            - Health check monitor name
-  Col 15: Real Server IP     - Real server backend IP
-  Col 16: Real Server Port   - Real server service port
-  Col 17: Real Server Weight - Real server weight
+  Col 18: Server Type        - Server type (http, https, ip, etc.)
+  Col 19: LDB Method         - Load balancing method (round-robin, weighted, etc.)
+  Col 20: Monitor            - Health check monitor name
+  Col 21: Real Server IP     - Real server backend IP
+  Col 22: Real Server Port   - Real server service port
+  Col 23: Real Server Weight - Real server weight
 
 [General]
-  Col 18: Comment            - VIP object comment
+  Col 24: Comment            - VIP object comment
 ```
 
 ### 5. DoS Policy Sheet Column Structure (26 Columns)
