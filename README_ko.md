@@ -2,7 +2,7 @@
 
 포티게이트(FortiGate) 방화벽의 백업 설정 파일(`.conf`)을 분석하여, VDOM별 정책과 객체를 가독성 높은 엑셀(`.xlsx`) 문서로 자동 변환·분할 생성해 주는 도구입니다.
 
-<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/01b1390f-9840-4ad8-abbe-5a12f589af31" />
+<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/5ece4552-d03f-4ed9-bd60-67843fd7078f" />
 
 
 ---
@@ -24,7 +24,7 @@
 * **Firewall Policy** : 일반 방화벽 정책 (Action, Schedule, NAT, IP Pool, Inspection Mode, UTM Profile, Log 등 33개 상세 열 수록)
 * **Local-in Policy** : 방화벽 장비 자체 접근 제어 정책
 * **Central-NAT** : Central SNAT Map (Original IP/Port ↔ Translated IP/Port 매핑, NAT 기본 활성화 상태 표기)
-* **DNAT (VIP)** : 가상 IP 및 포트포워딩 매핑 (External IP/Port ↔ Mapped IP/Port)
+* **DNAT (VIP)** : 가상 IP 및 포트포워딩 매핑 (External IP/Port ↔ Mapped IP/Port, 서비스 객체 4단 분리 전개, ARP Reply 및 NAT Source VIP 설정 상태 표기 등 24개 상세 열 수록)
 * **DoS Policy** : 서비스 거부 공격(DoS/DDoS) 방어 정책
 * **Static Route** : 정적 라우팅 설정 (Destination 대역 CIDR 자동 변환, Gateway, Interface, Distance, Priority, 특수 플래그, 비활성화 음영 수록)
 * **Policy Route** : 정책 기반 라우팅(PBR) (Incoming/Outgoing Interface, Gateway, Action, Protocol, Port Range, 주소 객체 다중 행 전개 및 셀 병합)
@@ -92,7 +92,7 @@
 | **운영체제** | Windows 10 / Windows 11 (64-bit) *(macOS / Linux는 CLI 모드 지원)* |
 | **Python 버전** | **Python 3.8 이상** (Python 3.10 ~ 3.13 완벽 호환) |
 | **디스플레이** | 1920×1080 (FHD) 이상 (QHD, 4K 배율 환경 완벽 지원) |
-| **필수 라이브러리** | `openpyxl` |
+| **필수 라이브러리** | `openpyxl`, `pywebview` *(미설치 시 Tkinter 클래식 GUI로 자동 폴백)* |
 
 ---
 
@@ -102,29 +102,34 @@
 1. [Python 공식 웹사이트](https://www.python.org/downloads/)에서 Python 3.10 이상 최신 버전을 다운로드합니다.
 2. 설치 실행 창 첫 화면 맨 아래에 있는 **`[✔] Add python.exe to PATH`** 체크박스를 **반드시 체크**하고 설치를 진행합니다.
 
-### 2. 필수 라이브러리(`openpyxl`) 설치
+### 2. 필수 라이브러리(`openpyxl`, `pywebview`) 설치
 명령 프롬프트(CMD) 또는 파워쉘을 열고 다음 명령어를 입력합니다:
 
 ```bash
-pip install openpyxl
+pip install openpyxl pywebview
 ```
+*(Start.bat 실행 시 필요한 라이브러리가 없는 경우 자동으로 감지하여 설치를 진행합니다.)*
 
 ---
 
 ## 🚀 프로그램 실행 방법
 
 ### 방법 1. 탐색기에서 더블 클릭 (가장 권장)
-1. 프로그램 폴더 내의 **`start.bat`** 파일을 더블 클릭합니다.
-2. GUI 창이 열립니다.
-3. **[Select File...]** 버튼을 눌러 변환할 포티게이트 `.conf` 파일을 선택합니다.
-4. **[Start Export to Excel]** 버튼을 클릭합니다.
+1. 프로그램 폴더 내의 **`Start.bat`** 파일을 더블 클릭합니다.
+2. 최신 글래스모피즘(Glassmorphism) 스타일의 GUI 창이 열립니다.
+3. **[Select File]** 버튼을 눌러 변환할 포티게이트 `.conf` 파일을 선택합니다.
+4. **[START EXPORT TO EXCEL]** 버튼을 클릭합니다.
 5. 내보내기가 완료되면 결과 저장 폴더가 자동으로 열립니다.
 
 ### 방법 2. 파이썬 직접 실행 (GUI 모드)
-터미널에서 인자 없이 실행하면 GUI 모드로 실행됩니다:
+터미널에서 인자 없이 실행하면 최신 모던 GUI 모드로 실행됩니다:
 
 ```bash
+# 최신 모던 글래스모피즘 GUI 실행
 python fortigate_policy_to_excel.py
+
+# 클래식 다크 테마 GUI 실행 (Tkinter)
+python fortigate_policy_to_excel.py --tk
 ```
 
 ### 방법 3. 커맨드라인 실행 (CLI 모드 / 자동화 스크립트 연동)
@@ -134,6 +139,7 @@ GUI 창 없이 백그라운드나 배치 스크립트에서 명령줄 인자로 
 # 기본 사용법: python fortigate_policy_to_excel.py <설정파일경로> [출력디렉토리]
 python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
 ```
+
 
 ---
 
@@ -255,7 +261,7 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 21: Comment            - NAT 규칙 코멘트
 ```
 
-### 4. DNAT (VIP) 시트 컬럼 구성 (18개 열)
+### 4. DNAT (VIP) 시트 컬럼 구성 (24개 열)
 
 ```
 [VIP 기본 정보]
@@ -275,16 +281,26 @@ python fortigate_policy_to_excel.py "C:\backup\my_firewall.conf"
   Col 10: External Port      - 외부 수신 포트 대역 (extport)
   Col 11: Mapped Port        - 내부 매핑 포트 대역 (mappedport)
 
+[서비스 상세 영역 (Service)]
+  Col 12: Svc Group OBJ      - 서비스 그룹명 (그룹 포함 시)
+  Col 13: Svc OBJ Name       - 서비스 객체명
+  Col 14: Svc Port           - 실제 프로토콜 및 포트 번호 (TCP/80 등)
+  Col 15: Svc Comment        - 서비스 객체 코멘트
+
+[ARP 응답 및 소스 VIP 설정]
+  Col 16: ARP Reply          - ARP 응답 활성화 여부 (미설정 시 기본값 enable)
+  Col 17: NAT Source VIP     - Source VIP 매핑 활성화 여부 (미설정 시 기본값 disable)
+
 [서버 로드밸런싱 설정 (SLB)]
-  Col 12: Server Type        - 서버 타입 (http, https, ip 등)
-  Col 13: LDB Method         - 부하분산 방식 (round-robin, weighted 등)
-  Col 14: Monitor            - 헬스 체크 모니터 이름
-  Col 15: Real Server IP     - 실제 리얼 서버 IP
-  Col 16: Real Server Port   - 리얼 서버 서비스 포트
-  Col 17: Real Server Weight - 서버 가중치 (Weight)
+  Col 18: Server Type        - 서버 타입 (http, https, ip 등)
+  Col 19: LDB Method         - 부하분산 방식 (round-robin, weighted 등)
+  Col 20: Monitor            - 헬스 체크 모니터 이름
+  Col 21: Real Server IP     - 실제 리얼 서버 IP
+  Col 22: Real Server Port   - 리얼 서버 서비스 포트
+  Col 23: Real Server Weight - 서버 가중치 (Weight)
 
 [기타]
-  Col 18: Comment            - VIP 객체 코멘트
+  Col 24: Comment            - VIP 객체 코멘트
 ```
 
 ### 5. DoS Policy 시트 컬럼 구성 (26개 열)
