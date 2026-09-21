@@ -236,16 +236,42 @@ def find_section_range(lines, start, end, section_name):
 #  3. 객체 파서 / Object Parsers (Address, AddrGrp, Service, SvcGrp, IPPool)
 # ================================================================
 
+BUILTIN_ADDRESSES = {
+    'all': {'type': 'ipmask', 'ip': '0.0.0.0', 'prefix': '0', 'display': '0.0.0.0/0', 'comment': ''},
+    'none': {'type': 'ipmask', 'ip': '0.0.0.0', 'prefix': '32', 'display': '0.0.0.0/32', 'comment': ''},
+    'FIREWALL_AUTH_PORTAL_ADDRESS': {'type': 'ipmask', 'ip': '', 'prefix': '', 'display': '(auth-portal)', 'comment': ''},
+    'FABRIC_DEVICE': {'type': 'ipmask', 'ip': '', 'prefix': '', 'display': '(fabric-device)', 'comment': ''},
+}
+
+BUILTIN_SERVICES = {
+    'ALL': {'protocol': 'ALL', 'tcp_port': '', 'udp_port': '', 'display': 'ALL', 'comment': ''},
+    'ALL_TCP': {'protocol': 'TCP', 'tcp_port': '1-65535', 'udp_port': '', 'display': 'TCP/1-65535', 'comment': ''},
+    'ALL_UDP': {'protocol': 'UDP', 'tcp_port': '', 'udp_port': '1-65535', 'display': 'UDP/1-65535', 'comment': ''},
+    'ALL_ICMP': {'protocol': 'ICMP', 'tcp_port': '', 'udp_port': '', 'display': 'ICMP', 'comment': ''},
+    'ALL_ICMP6': {'protocol': 'ICMP6', 'tcp_port': '', 'udp_port': '', 'display': 'ICMP6', 'comment': ''},
+}
+
+BUILTIN_SCHEDULES_RECURRING = {
+    'always': {
+        'type': 'recurring',
+        'day': ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+        'start': '', 'end': '', 'comment': 'Always active'
+    },
+    'none': {
+        'type': 'recurring',
+        'day': ['none'],
+        'start': '', 'end': '', 'comment': 'Never active'
+    }
+}
+
+
 def parse_address_objects(lines, vdom_start, vdom_end):
     """config firewall address -> dict[name] = {type, ip, prefix, comment, ...}"""
     addrs = {}
-    builtin = {
-        'all': {'type': 'ipmask', 'ip': '0.0.0.0', 'prefix': '0', 'display': '0.0.0.0/0', 'comment': ''},
-        'none': {'type': 'ipmask', 'ip': '0.0.0.0', 'prefix': '32', 'display': '0.0.0.0/32', 'comment': ''},
-        'FIREWALL_AUTH_PORTAL_ADDRESS': {'type': 'ipmask', 'ip': '', 'prefix': '', 'display': '(auth-portal)', 'comment': ''},
-        'FABRIC_DEVICE': {'type': 'ipmask', 'ip': '', 'prefix': '', 'display': '(fabric-device)', 'comment': ''},
-    }
-    addrs.update(builtin)
+    for k, v in BUILTIN_ADDRESSES.items():
+        o = dict(v)
+        o['is_builtin'] = True
+        addrs[k] = o
 
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall address")
     for sr, er in ranges:
@@ -255,7 +281,8 @@ def parse_address_objects(lines, vdom_start, vdom_end):
                 name = parse_edit_id(lines[i])
                 obj = {'type': 'ipmask', 'ip': '', 'prefix': '', 'fqdn': '',
                        'start-ip': '', 'end-ip': '', 'country': '',
-                       'wildcard-fqdn': '', 'display': '', 'comment': ''}
+                       'wildcard-fqdn': '', 'display': '', 'comment': '',
+                       'is_builtin': False}
                 subnet_ip = ''
                 subnet_mask = ''
                 has_data = False
@@ -297,7 +324,7 @@ def parse_address_objects(lines, vdom_start, vdom_end):
                             obj['comment'] = v
                     i += 1
 
-                if name in builtin and not has_data:
+                if name in BUILTIN_ADDRESSES and not has_data:
                     continue
 
                 if obj['type'] == 'ipmask' and subnet_ip:
@@ -332,7 +359,7 @@ def parse_address_objects(lines, vdom_start, vdom_end):
         while i <= er:
             if lines[i].strip().startswith("edit "):
                 name = parse_edit_id(lines[i])
-                obj = {'type': 'ipv6', 'ip': '', 'prefix': '', 'display': '(IPv6)', 'comment': ''}
+                obj = {'type': 'ipv6', 'ip': '', 'prefix': '', 'display': '(IPv6)', 'comment': '', 'is_builtin': False}
                 i += 1
                 while i <= er:
                     s = lines[i].strip()
@@ -347,7 +374,7 @@ def parse_address_objects(lines, vdom_start, vdom_end):
                         elif f in ('comment', 'comments'):
                             obj['comment'] = v
                     i += 1
-                if name not in addrs and name not in builtin:
+                if name not in addrs and name not in BUILTIN_ADDRESSES:
                     addrs[name] = obj
             i += 1
     return addrs
@@ -385,11 +412,10 @@ def parse_addrgrp_objects(lines, vdom_start, vdom_end):
 def parse_service_objects(lines, vdom_start, vdom_end):
     """config firewall service custom -> dict[name] = {protocol, tcp_port, comment, ...}"""
     svcs = {}
-    svcs['ALL'] = {'protocol': 'ALL', 'tcp_port': '', 'udp_port': '', 'display': 'ALL', 'comment': ''}
-    svcs['ALL_TCP'] = {'protocol': 'TCP', 'tcp_port': '1-65535', 'udp_port': '', 'display': 'TCP/1-65535', 'comment': ''}
-    svcs['ALL_UDP'] = {'protocol': 'UDP', 'tcp_port': '', 'udp_port': '1-65535', 'display': 'UDP/1-65535', 'comment': ''}
-    svcs['ALL_ICMP'] = {'protocol': 'ICMP', 'tcp_port': '', 'udp_port': '', 'display': 'ICMP', 'comment': ''}
-    svcs['ALL_ICMP6'] = {'protocol': 'ICMP6', 'tcp_port': '', 'udp_port': '', 'display': 'ICMP6', 'comment': ''}
+    for k, v in BUILTIN_SERVICES.items():
+        o = dict(v)
+        o['is_builtin'] = True
+        svcs[k] = o
 
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall service custom")
     for sr, er in ranges:
@@ -399,7 +425,8 @@ def parse_service_objects(lines, vdom_start, vdom_end):
                 name = parse_edit_id(lines[i])
                 obj = {'protocol': 'TCP/UDP/SCTP', 'tcp_port': '', 'udp_port': '',
                        'sctp_port': '', 'icmptype': '', 'icmpcode': '',
-                       'protocol_number': '', 'display': '', 'comment': ''}
+                       'protocol_number': '', 'display': '', 'comment': '',
+                       'is_builtin': False}
                 i += 1
                 while i <= er:
                     s = lines[i].strip()
@@ -585,19 +612,10 @@ def format_schedule_time(obj):
 def parse_schedule_recurring(lines, vdom_start, vdom_end):
     """config firewall schedule recurring -> dict[name] = {'type': 'recurring', 'day': [...], 'start': '...', 'end': '...', 'comment': '...'}"""
     scheds = {}
-    builtin = {
-        'always': {
-            'type': 'recurring',
-            'day': ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-            'start': '', 'end': '', 'comment': 'Always active'
-        },
-        'none': {
-            'type': 'recurring',
-            'day': ['none'],
-            'start': '', 'end': '', 'comment': 'Never active'
-        }
-    }
-    scheds.update(builtin)
+    for k, v in BUILTIN_SCHEDULES_RECURRING.items():
+        o = dict(v)
+        o['is_builtin'] = True
+        scheds[k] = o
 
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule recurring")
     for sr, er in ranges:
@@ -605,7 +623,7 @@ def parse_schedule_recurring(lines, vdom_start, vdom_end):
         while i <= er:
             if lines[i].strip().startswith("edit "):
                 name = parse_edit_id(lines[i])
-                obj = {'type': 'recurring', 'day': [], 'start': '', 'end': '', 'comment': ''}
+                obj = {'type': 'recurring', 'day': [], 'start': '', 'end': '', 'comment': '', 'is_builtin': False}
                 i += 1
                 while i <= er:
                     s = lines[i].strip()
@@ -5140,13 +5158,23 @@ def execute_conversion(config_file, base_dir=None, log_fn=print, status_fn=None)
     log_fn(f"    - Read {len(lines):,} lines successfully")
 
     # Check for valid FortiGate configuration syntax
-    has_fg_syntax = any(
-        l.strip().startswith(('config ', '#config-version=', '#build', 'set ', 'edit '))
-        for l in lines[:300]
+    has_header_directive = any(
+        l.strip().startswith(('config ', '#config-version=', '#build', '#conf_file_ver=', 'set ', 'edit '))
+        for l in lines[:500]
     )
-    if not has_fg_syntax:
-        log_fn("[WARNING] The file does not appear to contain standard FortiGate configuration syntax.")
-        log_fn("[DEBUG] Expected directives like 'config ...', '#config-version', or 'set ...' were not found in header.")
+    has_config_block = any(l.strip().startswith('config ') for l in lines)
+    has_set_or_edit = any(l.strip().startswith(('set ', 'edit ')) for l in lines)
+
+    is_valid_fg_config = (has_header_directive or has_config_block) and (has_config_block or has_set_or_edit)
+
+    if not is_valid_fg_config:
+        err_msg = (
+            f"The selected file '{os.path.basename(config_file)}' is not a valid FortiGate configuration file. "
+            f"Export aborted: no output folder or files were generated."
+        )
+        log_fn(f"\n[ERROR] {err_msg}")
+        log_fn("[DEBUG] Validation failed: Expected FortiGate CLI syntax (e.g. 'config <section>', 'set <key>', 'edit <id>') was not found.")
+        raise ValueError(err_msg)
 
     # 1. 호스트네임 추출 / 1. Extract Hostname
     hostname = parse_hostname(lines, default_name="FortiGate")
@@ -5205,9 +5233,13 @@ def execute_conversion(config_file, base_dir=None, log_fn=print, status_fn=None)
             sched_onetime_dict=merged_sched_onetime,
             sched_group_dict=merged_sched_grp
         )
+        # Exclude built-in default objects (all, none, ALL, always, etc.) from user config object count
+        user_addr_cnt = sum(1 for k, obj in addr_dict.items() if not obj.get('is_builtin', False))
+        user_svc_cnt = sum(1 for k, obj in svc_dict.items() if not obj.get('is_builtin', False))
+        user_sched_recur_cnt = sum(1 for k, obj in merged_sched_recur.items() if not obj.get('is_builtin', False))
         obj_counts = [
-            len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict),
-            len(merged_sched_recur), len(merged_sched_onetime), len(merged_sched_grp)
+            user_addr_cnt, len(addrgrp_dict), user_svc_cnt, len(svcgrp_dict), len(ippool_dict),
+            user_sched_recur_cnt, len(merged_sched_onetime), len(merged_sched_grp)
         ]
         vdom_obj_counts[vdom_name] = obj_counts
 
