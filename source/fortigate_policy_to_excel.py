@@ -73,13 +73,18 @@ except ImportError:
 #  1. 유틸리티 / Utilities
 # ================================================================
 
+_QUOTED_RE = re.compile(r'"([^"]*)"')
+
+
 def parse_quoted_values(line):
     """'set field "val1" "val2" ...' -> ["val1", "val2"]"""
     parts = line.strip().split(None, 2)
     if len(parts) < 3:
         return []
     rest = parts[2]
-    quoted = re.findall(r'"([^"]*)"', rest)
+    if '"' not in rest:
+        return rest.split()
+    quoted = _QUOTED_RE.findall(rest)
     if quoted:
         return quoted
     return rest.split()
@@ -207,8 +212,9 @@ def find_vdom_boundaries(lines):
 def find_section_range(lines, start, end, section_name):
     results = []
     i = start
+    target = f"config {section_name}"
     while i <= end:
-        if lines[i].strip() == f"config {section_name}":
+        if lines[i].strip() == target:
             sec_start = i
             depth = 1
             j = i + 1
@@ -787,6 +793,7 @@ class ObjectResolver:
         self.sched_groups = sched_group_dict or {}
         self._addr_cache = {}
         self._svc_cache = {}
+        self._sched_cache = {}
 
     def resolve_address(self, name, _visited=None):
         """
@@ -922,7 +929,10 @@ class ObjectResolver:
         if not name:
             return [(None, 'always', 'recurring', 'Always', '')]
 
-        if _visited is None:
+        top_level = (_visited is None)
+        if top_level:
+            if name in self._sched_cache:
+                return self._sched_cache[name]
             _visited = set()
         if name in _visited:
             return [(None, name, 'ref-loop', '', '')]
@@ -939,26 +949,38 @@ class ObjectResolver:
                 for item in sub:
                     c = item[4] or grp_comment
                     result.append((name, item[1], item[2], item[3], c))
-            if not result:
-                result.append((name, '(empty)', 'group(empty)', '', grp_comment))
-            return result
+            res = result if result else [(name, '(empty)', 'group(empty)', '', grp_comment)]
+            if top_level:
+                self._sched_cache[name] = res
+            return res
 
         if name in self.sched_recurring:
             obj = self.sched_recurring[name]
             time_disp = format_schedule_time(obj)
-            return [(None, name, 'recurring', time_disp, obj.get('comment', ''))]
+            res = [(None, name, 'recurring', time_disp, obj.get('comment', ''))]
+            if top_level:
+                self._sched_cache[name] = res
+            return res
 
         if name in self.sched_onetime:
             obj = self.sched_onetime[name]
             time_disp = format_schedule_time(obj)
-            return [(None, name, 'onetime', time_disp, obj.get('comment', ''))]
+            res = [(None, name, 'onetime', time_disp, obj.get('comment', ''))]
+            if top_level:
+                self._sched_cache[name] = res
+            return res
 
-        if name.lower() == 'always':
-            return [(None, 'always', 'recurring', 'Always', '')]
-        elif name.lower() == 'none':
-            return [(None, 'none', 'recurring', 'None', '')]
+        nl = name.lower()
+        if nl == 'always':
+            res = [(None, 'always', 'recurring', 'Always', '')]
+        elif nl == 'none':
+            res = [(None, 'none', 'recurring', 'None', '')]
+        else:
+            res = [(None, name, 'unknown', '', '')]
 
-        return [(None, name, 'unknown', '', '')]
+        if top_level:
+            self._sched_cache[name] = res
+        return res
 
 
 
@@ -1104,6 +1126,9 @@ def parse_vip(lines, sec_start, sec_end):
             e['server-type'] = ''
             e['ldb-method'] = ''
             e['monitor'] = ''
+            e['service'] = []
+            e['arp-reply'] = 'enable'
+            e['nat-source-vip'] = 'disable'
             e['realservers'] = []
             i += 1
             in_rs = False
@@ -1143,6 +1168,14 @@ def parse_vip(lines, sec_start, sec_end):
                         e['mappedip'] = '\n'.join(parse_quoted_values(lines[i]))
                     elif f == 'monitor':
                         e['monitor'] = '\n'.join(parse_quoted_values(lines[i]))
+                    elif f == 'service':
+                        e['service'] = parse_quoted_values(lines[i])
+                    elif f == 'arp-reply':
+                        val = parse_set_value(lines[i])
+                        e['arp-reply'] = val if val else 'enable'
+                    elif f == 'nat-source-vip':
+                        val = parse_set_value(lines[i])
+                        e['nat-source-vip'] = val if val else 'disable'
                     else:
                         e[f] = parse_set_value(lines[i])
                 i += 1
@@ -1965,12 +1998,23 @@ def write_styled_header(ws, row, headers_with_cat):
     ws.freeze_panes = ws.cell(row=row + 1, column=1).coordinate
 
 
+_TOP_ALIGN_CACHE = {}
+
+
+def _get_top_alignment(h_align):
+    al = _TOP_ALIGN_CACHE.get(h_align)
+    if al is None:
+        al = Alignment(horizontal=h_align, vertical='top', wrap_text=True)
+        _TOP_ALIGN_CACHE[h_align] = al
+    return al
+
+
 def merge_row_range(ws, start_row, end_row, col, h_align=None):
     if end_row > start_row:
         ws.merged_cells.ranges.add(CellRange(min_row=start_row, min_col=col, max_row=end_row, max_col=col))
         cell = ws.cell(row=start_row, column=col)
         cur_h = h_align or (cell.alignment.horizontal if cell.alignment else 'center')
-        cell.alignment = Alignment(horizontal=cur_h, vertical='top', wrap_text=True)
+        cell.alignment = _get_top_alignment(cur_h)
 
 
 def merge_group_spans(ws, p_start, expanded_list, col, h_align='left'):
@@ -2005,10 +2049,19 @@ def auto_fit(ws, min_w=6, max_w=45):
         for cell in col_cells:
             if (cell.row, col_idx) in multi_col_merged:
                 continue
-            if cell.value is not None:
-                for line in str(cell.value).split('\n'):
-                    line_w = sum(2 if ord(ch) > 127 else 1 for ch in line)
-                    mx = max(mx, line_w)
+            val = cell.value
+            if val is not None:
+                s_val = str(val)
+                lines = s_val.split('\n') if '\n' in s_val else (s_val,)
+                for line in lines:
+                    if not line:
+                        continue
+                    if line.isascii():
+                        line_w = len(line)
+                    else:
+                        line_w = len(line) + sum(1 for ch in line if ord(ch) > 127)
+                    if line_w > mx:
+                        mx = line_w
         ws.column_dimensions[cl].width = min(max(mx + 2, min_w), max_w)
 
 
@@ -2025,12 +2078,45 @@ def check_and_mark_empty_sheet_tabs(wb, empty_tab_color=TAB_COLOR_EMPTY):
             continue
         has_data = False
         if ws.max_row > 1:
-            for r in range(2, ws.max_row + 1):
-                if any(ws.cell(row=r, column=c).value is not None for c in range(1, ws.max_column + 1)):
+            for row_vals in ws.iter_rows(min_row=2, values_only=True):
+                if any(v is not None for v in row_vals):
                     has_data = True
                     break
         if not has_data:
             ws.sheet_properties.tabColor = empty_tab_color
+
+
+def safe_save_workbook(wb, filepath, log_fn=None):
+    """
+    엑셀 파일 저장 시 Excel 프로그램 등에서 파일이 열려 있어 PermissionError(WinError 32 / [Errno 13])가
+    발생하는 경우 사용자에게 명확하고 친절한 안내 메시지를 제공하고 대체 타임스탬프 파일명으로 안전하게 보존합니다.
+    """
+    try:
+        wb.save(filepath)
+        return filepath
+    except PermissionError as e:
+        import time
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        base, ext = os.path.splitext(filepath)
+        alt_path = f"{base}_{ts}{ext}"
+        fname = os.path.basename(filepath)
+        msg_en = (
+            f"[WARNING] '{fname}' is currently locked by Excel or another program and cannot be overwritten.\n"
+            f"          Preserving data by saving to timestamped file: '{os.path.basename(alt_path)}'"
+        )
+        if log_fn:
+            log_fn(msg_en)
+        else:
+            print(msg_en)
+        try:
+            wb.save(alt_path)
+            return alt_path
+        except Exception:
+            raise PermissionError(
+                f"'{fname}' is locked by another process (e.g. Microsoft Excel). "
+                f"Please close '{fname}' in Excel and retry. (Error: {e})"
+            )
+
 
 
 # ================================================================
@@ -2538,12 +2624,16 @@ def write_central_nat_sheet(ws, entries, resolver, vdom_name=""):
 # 10. 시트 작성 - DNAT (VIP) / Sheet Builder - DNAT (VIP)
 # ================================================================
 
-def write_dnat_sheet(ws, entries, vdom_name=""):
+def write_dnat_sheet(ws, entries, resolver=None, vdom_name=""):
     headers_with_cat = [
         ("Seq", "base"), ("vDOM", "base"), ("Name", "base"), ("Type", "base"),
         ("External IP", "src"), ("Mapped IP", "dst"), ("External Interface", "src"),
         ("Port Forward", "base"), ("Protocol", "base"),
         ("External Port", "src"), ("Mapped Port", "dst"),
+        # 서비스 열 (12~15) / Service columns (12-15)
+        ("Svc Group OBJ", "svc"), ("Svc OBJ Name", "svc"),
+        ("Svc Port", "svc"), ("Svc Comment", "svc"),
+        ("ARP Reply", "base"), ("NAT Source VIP", "base"),
         ("Server Type", "base"), ("LDB Method", "base"), ("Monitor", "base"),
         ("Real Server IP", "dst"), ("Real Server Port", "dst"), ("Real Server Weight", "dst"),
         ("Comment", "base")
@@ -2558,9 +2648,21 @@ def write_dnat_sheet(ws, entries, vdom_name=""):
         b_fill, b_font = get_cell_style('base', seq, False)
         s_fill, s_font = get_cell_style('src', seq, False)
         d_fill, d_font = get_cell_style('dst', seq, False)
+        v_fill, v_font = get_cell_style('svc', seq, False)
+        vg_fill, vg_font = get_cell_style('svc', seq, False, is_group=True)
+
+        # Service expansion via resolver
+        svc_expanded = []
+        raw_services = e.get('service') or []
+        if resolver:
+            for sname in raw_services:
+                svc_expanded.extend(resolver.resolve_service(sname))
+        else:
+            for sname in raw_services:
+                svc_expanded.append((None, sname, '', ''))
 
         rs_list = e.get('realservers', [])
-        max_rows = max(len(rs_list), 1)
+        max_rows = max(len(rs_list), len(svc_expanded), 1)
         p_start = row
         p_end = row + max_rows - 1
 
@@ -2578,31 +2680,46 @@ def write_dnat_sheet(ws, entries, vdom_name=""):
                 sc(ws, cur_r, 9, e.get('protocol', ''), font=b_font, fill=b_fill, align=CENTER)
                 sc(ws, cur_r, 10, e.get('extport', ''), font=s_font, fill=s_fill, align=CENTER)
                 sc(ws, cur_r, 11, e.get('mappedport', ''), font=d_font, fill=d_fill, align=CENTER)
-                sc(ws, cur_r, 12, e.get('server-type', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 13, e.get('ldb-method', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 14, e.get('monitor', ''), font=b_font, fill=b_fill)
-                sc(ws, cur_r, 18, e.get('comment', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 16, e.get('arp-reply', 'enable'), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 17, e.get('nat-source-vip', 'disable'), font=b_font, fill=b_fill, align=CENTER)
+                sc(ws, cur_r, 18, e.get('server-type', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 19, e.get('ldb-method', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 20, e.get('monitor', ''), font=b_font, fill=b_fill)
+                sc(ws, cur_r, 24, e.get('comment', ''), font=b_font, fill=b_fill)
             else:
-                for c in [1, 2, 3, 4, 8, 9, 12, 13, 14, 18]:
+                for c in [1, 2, 3, 4, 8, 9, 16, 17, 18, 19, 20, 24]:
                     sc(ws, cur_r, c, None, font=b_font, fill=b_fill)
                 for c in [5, 7, 10]:
                     sc(ws, cur_r, c, None, font=s_font, fill=s_fill)
                 for c in [6, 11]:
                     sc(ws, cur_r, c, None, font=d_font, fill=d_fill)
 
+            # Service columns (12~15)
+            if ri < len(svc_expanded):
+                sgrp, sname, sport, scomm = svc_expanded[ri]
+                sc(ws, cur_r, 12, sgrp or '', font=vg_font if sgrp else v_font, fill=v_fill)
+                sc(ws, cur_r, 13, sname, font=v_font, fill=v_fill)
+                sc(ws, cur_r, 14, sport, font=v_font, fill=v_fill)
+                sc(ws, cur_r, 15, scomm, font=v_font, fill=v_fill)
+            else:
+                for c in range(12, 16):
+                    sc(ws, cur_r, c, None, font=v_font, fill=v_fill)
+
+            # Real Server columns (21~23)
             if ri < len(rs_list):
                 rs = rs_list[ri]
-                sc(ws, cur_r, 15, rs.get('ip', ''), font=d_font, fill=d_fill)
-                sc(ws, cur_r, 16, rs.get('port', ''), font=d_font, fill=d_fill, align=CENTER)
-                sc(ws, cur_r, 17, rs.get('weight', '1'), font=d_font, fill=d_fill, align=CENTER)
+                sc(ws, cur_r, 21, rs.get('ip', ''), font=d_font, fill=d_fill)
+                sc(ws, cur_r, 22, rs.get('port', ''), font=d_font, fill=d_fill, align=CENTER)
+                sc(ws, cur_r, 23, rs.get('weight', '1'), font=d_font, fill=d_fill, align=CENTER)
             else:
-                for c in [15, 16, 17]:
+                for c in [21, 22, 23]:
                     sc(ws, cur_r, c, None, font=d_font, fill=d_fill)
 
         if p_end > p_start:
-            common_cols = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 18]
+            common_cols = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 24]
             for c in common_cols:
                 merge_row_range(ws, p_start, p_end, c)
+            merge_group_spans(ws, p_start, svc_expanded, 12, h_align='left')
 
         row += max_rows
 
@@ -3517,7 +3634,7 @@ def write_interface_sheet(ws, interfaces, vdom_name=""):
 # 17. 개별 vDOM 엑셀 생성 함수 / Per-vDOM Excel Generation Function
 # ================================================================
 
-def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None, static_routes=None, policy_routes=None, ospf_data=None, vpn_data=None, interfaces=None, acl_pols=None):
+def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols, resolver, obj_counts, filepath, profile_comments=None, vdom_inspection_mode="flow", ext_resources=None, static_routes=None, policy_routes=None, ospf_data=None, vpn_data=None, interfaces=None, acl_pols=None, log_fn=None):
     wb = Workbook()
 
     # 1. 요약 시트 / Summary Sheet
@@ -3571,7 +3688,7 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
 
     # 5. DNAT (VIP) 정책 시트 / DNAT (VIP) Sheet
     ws_dn = wb.create_sheet("DNAT (VIP)")
-    write_dnat_sheet(ws_dn, dn_ents, vdom_name)
+    write_dnat_sheet(ws_dn, dn_ents, resolver, vdom_name)
 
     # 6. DoS 정책 시트 / DoS Policy Sheet
     ws_dos = wb.create_sheet("DoS Policy")
@@ -3608,7 +3725,8 @@ def export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_
     # 13. 내용 없는 빈 시트 탭 색상 빨간색으로 지정 / Highlight empty sheet tabs with red
     check_and_mark_empty_sheet_tabs(wb, TAB_COLOR_EMPTY)
 
-    wb.save(filepath)
+    actual_saved = safe_save_workbook(wb, filepath, log_fn=log_fn)
+    return actual_saved
 
 
 # ================================================================
@@ -3635,7 +3753,8 @@ C_BTN_SECONDARY = "#3a3d41"   # 보조 버튼 (다크 그레이) / Secondary But
 C_BTN_SECONDARY_HOVER = "#45494e"
 C_BTN_DISABLED = "#2d2d2d"    # 비활성화 버튼 / Disabled Button
 C_BTN_DISABLED_FG = "#555555"
-C_TAG_vDOM = "#dcdcaa"        # vDOM 로그 태그 (노란색) / vDOM Tag (Yellow)
+C_TAG_vDOM = "#dcdcaa"        # vDOM 로그 태그 / vDOM Tag
+C_TAG_VDOM_NAME = "#81c995"    # vDOM 이름 녹색 강조 태그 / vDOM Name Green Tag
 C_TAG_INFO = "#569cd6"        # 안내 정보 태그 (파란색) / Info Tag (Blue)
 C_TAG_SUCCESS = "#4ec9b0"     # 완료/성공 태그 (민트색) / Success Tag (Mint)
 C_TAG_ERROR = "#f14c4c"       # 에러 태그 (빨간색) / Error Tag (Red)
@@ -4676,8 +4795,12 @@ class FortiGateGUI:
             )
             txt.tag_config('info', foreground=C_TAG_INFO)
             txt.tag_config('vdom', foreground=C_TAG_vDOM, font=('Consolas', 10, 'bold'))
+            txt.tag_config('vdom_name', foreground=C_TAG_VDOM_NAME, font=('Consolas', 10, 'bold'))
             txt.tag_config('success', foreground=C_TAG_SUCCESS, font=('Consolas', 10, 'bold'))
             txt.tag_config('error', foreground=C_TAG_ERROR, font=('Consolas', 10, 'bold'))
+            txt.tag_config('warning', foreground="#fdd663", font=('Consolas', 10, 'bold'))
+            txt.tag_config('debug', foreground="#8ab4f8", font=('Consolas', 10))
+            txt.tag_config('trace', foreground="#d2a8ff", font=('Consolas', 9))
             txt.tag_config('comment', foreground=C_TAG_COMMENT)
             txt.tag_config('muted', foreground=C_TEXT_MUTED)
 
@@ -4882,13 +5005,25 @@ class FortiGateGUI:
             stripped = text.strip()
             if stripped.startswith("[*]"):
                 self.log_text.insert(tk.END, line, 'info')
-            elif stripped.startswith("[") and ("vDOM" in stripped or "/" in stripped[:6]):
-                self.log_text.insert(tk.END, line, 'vdom')
-            elif "[SUCCESS]" in stripped or "[SUMMARY COMPLETE]" in stripped or "[생성 완료]" in stripped or "[성공]" in stripped or "[총괄 요약 완료]" in stripped:
-                self.log_text.insert(tk.END, line, 'success')
-            elif "[ERROR]" in stripped or "[오류]" in stripped:
+            elif stripped.startswith("[ERROR]") or "[오류]" in stripped or stripped.startswith("Traceback"):
                 self.log_text.insert(tk.END, line, 'error')
                 self._record_problem(line)
+            elif stripped.startswith("[WARNING]") or "WARNING:" in stripped:
+                self.log_text.insert(tk.END, line, 'warning')
+            elif stripped.startswith("[DEBUG]"):
+                self.log_text.insert(tk.END, line, 'debug')
+            elif "File " in stripped and ", line " in stripped:
+                self.log_text.insert(tk.END, line, 'trace')
+            elif stripped.startswith("[") and ("vDOM" in stripped or "/" in stripped[:6]):
+                m_vdom = re.search(r"(Parsing vDOM\s+['\"])(.*?)(['\"])", line)
+                if m_vdom:
+                    self.log_text.insert(tk.END, line[:m_vdom.start(2)], 'vdom')
+                    self.log_text.insert(tk.END, m_vdom.group(2), 'vdom_name')
+                    self.log_text.insert(tk.END, line[m_vdom.end(2):], 'vdom')
+                else:
+                    self.log_text.insert(tk.END, line, 'vdom')
+            elif "[SUCCESS]" in stripped or "[SUMMARY COMPLETE]" in stripped or "[생성 완료]" in stripped or "[성공]" in stripped or "[총괄 요약 완료]" in stripped:
+                self.log_text.insert(tk.END, line, 'success')
             elif stripped.startswith("-") or stripped.startswith("->"):
                 self.log_text.insert(tk.END, line, 'comment')
             else:
@@ -4945,170 +5080,12 @@ class FortiGateGUI:
 
     def _run_process(self, conf_file, out_dir):
         try:
-            self._set_status("⟳ Loading configuration file...", 5)
-            self._log(f"[*] Loading FortiGate configuration: {conf_file}")
-
-            with open(conf_file, 'r', encoding='utf-8', errors='replace') as f:
-                lines = f.read().split('\n')
-            self._log(f"    - Read {len(lines):,} lines successfully")
-
-            # 1. 호스트네임 추출 / 1. Extract Hostname
-            hostname = parse_hostname(lines, default_name="FortiGate")
-            target_dir = os.path.join(out_dir, hostname)
-            os.makedirs(target_dir, exist_ok=True)
-            self.last_target_dir = target_dir
-            self._log(f"[*] Hostname: {hostname}")
-            self._log(f"[*] Target Directory: {target_dir}")
-
-            # 2. vDOM 경계 분석 / 2. Analyze vDOM Boundaries
-            self._set_status("⟳ Analyzing vDOM boundaries...", 10)
-            vdom_sections = find_vdom_boundaries(lines)
-            num_vdoms = len(vdom_sections)
-            self._log(f"[*] {num_vdoms} vDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
-
-            all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
-            all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
-            all_sched_recur = parse_schedule_recurring(lines, 0, len(lines)-1)
-            all_sched_onetime = parse_schedule_onetime(lines, 0, len(lines)-1)
-            all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
-            all_vdom_interfaces = parse_system_interfaces(lines)
-
-            # 3. vDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per vDOM & Generate Individual Excel Files
-            summary_list = []
-            vdom_obj_counts = {}
-
-            for idx, (vdom_name, vs, ve) in enumerate(vdom_sections, 1):
-                pct = 10 + int((idx / num_vdoms) * 80)
-                self._set_status(f"⟳ Processing ({idx}/{num_vdoms}): {vdom_name}", pct)
-                self._log(f"\n[{idx}/{num_vdoms}] Parsing vDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
-
-                vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
-                vdom_ext_res = parse_external_resources(lines, vs, ve)
-                merged_ext_res = OrderedDict(all_ext_resources)
-                merged_ext_res.update(vdom_ext_res)
-
-                addr_dict = parse_address_objects(lines, vs, ve)
-                addrgrp_dict = parse_addrgrp_objects(lines, vs, ve)
-                svc_dict = parse_service_objects(lines, vs, ve)
-                svcgrp_dict = parse_service_groups(lines, vs, ve)
-                ippool_dict = parse_ippool_objects(lines, vs, ve)
-
-                merged_sched_recur = dict(all_sched_recur)
-                merged_sched_recur.update(parse_schedule_recurring(lines, vs, ve))
-                merged_sched_onetime = dict(all_sched_onetime)
-                merged_sched_onetime.update(parse_schedule_onetime(lines, vs, ve))
-                merged_sched_grp = dict(all_sched_grp)
-                merged_sched_grp.update(parse_schedule_group(lines, vs, ve))
-
-                resolver = ObjectResolver(
-                    addr_dict, addrgrp_dict, svc_dict, svcgrp_dict, ippool_dict,
-                    ext_resources=merged_ext_res,
-                    sched_recurring_dict=merged_sched_recur,
-                    sched_onetime_dict=merged_sched_onetime,
-                    sched_group_dict=merged_sched_grp
-                )
-                obj_counts = [
-                    len(addr_dict), len(addrgrp_dict), len(svc_dict), len(svcgrp_dict), len(ippool_dict),
-                    len(merged_sched_recur), len(merged_sched_onetime), len(merged_sched_grp)
-                ]
-                vdom_obj_counts[vdom_name] = obj_counts
-
-                fw_pols = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall policy"):
-                    fw_pols.extend(parse_firewall_policy(lines, sr, er))
-
-                li_pols = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall local-in-policy"):
-                    li_pols.extend(parse_local_in_policy(lines, sr, er))
-
-                cn_ents = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall central-snat-map"):
-                    cn_ents.extend(parse_central_snat(lines, sr, er))
-
-                dn_ents = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall vip"):
-                    dn_ents.extend(parse_vip(lines, sr, er))
-
-                dos_pols = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall DoS-policy"):
-                    dos_pols.extend(parse_dos_policy(lines, sr, er))
-
-                acl_pols = []
-                for sr, er in find_section_range(lines, vs, ve, "firewall acl"):
-                    acl_pols.extend(parse_firewall_acl(lines, sr, er))
-
-                static_routes = parse_router_static(lines, vs, ve)
-                policy_routes = parse_router_policy(lines, vs, ve)
-                ospf_data = parse_router_ospf(lines, vs, ve)
-                vpn_data = parse_ipsec_vpn(lines, vs, ve)
-                vdom_interfaces = all_vdom_interfaces.get(vdom_name, [])
-
-                counts = [
-                    len(fw_pols), len(li_pols), len(cn_ents), len(dn_ents), len(dos_pols), len(acl_pols),
-                    len(static_routes), len(policy_routes), len(ospf_data.get('networks', [])), len(vpn_data),
-                    len(vdom_interfaces)
-                ]
-                summary_list.append((vdom_name, counts))
-
-                clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
-                vdom_file_path = os.path.join(target_dir, clean_vdom_filename)
-                export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
-                                         resolver, obj_counts, vdom_file_path,
-                                         profile_comments=all_profile_comments,
-                                         vdom_inspection_mode=vdom_insp_mode,
-                                         ext_resources=merged_ext_res,
-                                         static_routes=static_routes,
-                                         policy_routes=policy_routes,
-                                         ospf_data=ospf_data,
-                                         vpn_data=vpn_data,
-                                         interfaces=vdom_interfaces,
-                                         acl_pols=acl_pols)
-                self._log(f"    -> [SUCCESS] {clean_vdom_filename} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]}, ACL: {counts[5]}, StaticRt: {counts[6]}, PolicyRt: {counts[7]}, OSPF: {counts[8]}, IPsec: {counts[9]}, Intf: {counts[10]})")
-
-            # 4. 전체 요약 엑셀 생성 / 4. Generate Total Summary Excel
-            self._set_status("⟳ Building total summary workbook...", 95)
-            total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
-            wb_tot = Workbook()
-            ws_tot = wb_tot.active
-            ws_tot.title = "vDOM Total Summary"
-            tot_headers = ["vDOM", "Firewall Policy", "Local-in Policy",
-                           "Central-NAT", "DNAT (VIP)", "DoS Policy", "ACL Policy",
-                           "Static Route", "Policy Route", "OSPF Networks", "IPsec VPN",
-                           "Network Interfaces",
-                           "Address Objects", "Addr Groups",
-                           "Service Objects", "Svc Groups", "IP Pools",
-                           "Sched Recurring", "Sched Onetime", "Sched Groups"]
-            for col, h in enumerate(tot_headers, 1):
-                sc(ws_tot, 1, col, h, font=HDR_FONT, fill=HDR_DEFAULT_FILL, align=CENTER)
-            ws_tot.freeze_panes = "A2"
-
-            for ri, (vdom, counts) in enumerate(summary_list, 2):
-                fill = EVEN_ROW_FILL if ri % 2 == 0 else ODD_ROW_FILL
-                oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0, 0, 0, 0])
-                vals = [vdom] + counts + oc
-                for col, v in enumerate(vals, 1):
-                    f = Font(name="맑은 고딕", size=10, bold=(col == 1))
-                    sc(ws_tot, ri, col, v, font=f, fill=fill, align=CENTER)
-
-            tr = len(summary_list) + 2
-            sc(ws_tot, tr, 1, "Total", font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
-            for col in range(2, len(tot_headers) + 1):
-                total = sum(
-                    (summary_list[r][1][col - 2] if col <= 12 else
-                     vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 13])
-                    for r in range(len(summary_list))
-                )
-                sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
-
-            auto_fit(ws_tot, min_w=12)
-            wb_tot.save(total_summary_path)
-            self._log(f"\n[*] [SUMMARY COMPLETE] _TOTAL_SUMMARY.xlsx")
-
-            self._set_status("✔ All Excel workbooks generated successfully", 100)
-            self._log(f"\n[SUCCESS] Total {num_vdoms} vDOM Excel files exported to '{target_dir}'.")
-
+            self.last_target_dir = execute_conversion(
+                conf_file, out_dir,
+                log_fn=self._log,
+                status_fn=self._set_status
+            )
             self.root.after(0, self._on_success)
-
         except Exception as ex:
             self._set_status(f"✖ Error occurred: {str(ex)}", 0)
             self._log(f"\n[ERROR] An error occurred during export:\n{str(ex)}")
@@ -5133,54 +5110,58 @@ class FortiGateGUI:
 
 
 # ================================================================
-# 14. 실행 진입점 (GUI 및 CLI 통합) / Execution Entry Points (Unified GUI & CLI)
+# 14. 핵심 변환 파이프라인 및 실행 진입점 / Core Conversion Pipeline & Entry Points
 # ================================================================
 
-def run_gui():
-    """모던 다크 테마 GUI 실행 / Launch Modern Dark Theme GUI"""
-    if not HAS_TKINTER:
-        print("[ERROR] Tkinter module is not available. GUI cannot start.")
-        print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
-        sys.exit(1)
-
-    # Windows 작업표시줄 독립 앱 ID 설정 / Set AppUserModelID for independent taskbar icon
-    if sys.platform == 'win32':
-        try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                'fortinet.fortigate.policytoexcel.exporter.1.0'
-            )
-        except Exception:
-            pass
-
-    root = tk.Tk()
-    app = FortiGateGUI(root)
-    root.mainloop()
-
-
-def run_cli(config_file=None, base_dir=None):
-    """커맨드라인(CLI) 모드 실행 / Launch Headless Command-Line Interface (CLI)"""
-    if config_file is None:
-        if len(sys.argv) < 2:
-            print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
-            sys.exit(1)
-        config_file = sys.argv[1]
+def execute_conversion(config_file, base_dir=None, log_fn=print, status_fn=None):
+    """
+    FortiGate 설정 파일(.conf)을 분석하여 각 vDOM별 엑셀 파일 및 총괄 요약 파일 생성
+    Core conversion pipeline used by both PyWebView GUI, Tkinter GUI, and CLI mode.
+    """
     if base_dir is None:
-        base_dir = sys.argv[2] if len(sys.argv) >= 3 else os.path.dirname(config_file) or '.'
+        base_dir = os.path.dirname(config_file) or '.'
 
-    print(f"[*] Config loading: {config_file}")
+    if status_fn:
+        status_fn("⟳ Loading configuration file...", 5)
+    log_fn(f"[*] Config loading: {config_file}")
+
+    if not os.path.isfile(config_file):
+        raise FileNotFoundError(f"Configuration file not found: '{config_file}'")
+
+    if os.path.getsize(config_file) == 0:
+        raise ValueError(f"Configuration file is empty (0 bytes): '{config_file}'")
+
     with open(config_file, 'r', encoding='utf-8', errors='replace') as f:
         lines = f.read().split('\n')
-    print(f"    {len(lines):,} lines loaded")
 
+    if not lines or (len(lines) == 1 and not lines[0].strip()):
+        raise ValueError("Configuration file contains no readable lines or content.")
+
+    log_fn(f"    - Read {len(lines):,} lines successfully")
+
+    # Check for valid FortiGate configuration syntax
+    has_fg_syntax = any(
+        l.strip().startswith(('config ', '#config-version=', '#build', 'set ', 'edit '))
+        for l in lines[:300]
+    )
+    if not has_fg_syntax:
+        log_fn("[WARNING] The file does not appear to contain standard FortiGate configuration syntax.")
+        log_fn("[DEBUG] Expected directives like 'config ...', '#config-version', or 'set ...' were not found in header.")
+
+    # 1. 호스트네임 추출 / 1. Extract Hostname
     hostname = parse_hostname(lines, default_name="FortiGate")
     target_dir = os.path.join(base_dir, hostname)
     os.makedirs(target_dir, exist_ok=True)
-    print(f"[*] Hostname: {hostname}")
-    print(f"[*] Output Directory: {target_dir}")
+    log_fn(f"[*] Hostname: {hostname}")
+    log_fn(f"[*] Output Directory: {target_dir}")
 
-    print("[*] vDOM parsing...")
+    # 2. vDOM 경계 분석 / 2. Analyze vDOM Boundaries
+    if status_fn:
+        status_fn("⟳ Analyzing vDOM boundaries...", 10)
+    log_fn("[*] vDOM parsing...")
     vdom_sections = find_vdom_boundaries(lines)
-    print(f"    {len(vdom_sections)} vDOMs: {', '.join(v[0] for v in vdom_sections)}")
+    num_vdoms = len(vdom_sections)
+    log_fn(f"    {num_vdoms} vDOM(s) detected: {', '.join(v[0] for v in vdom_sections)}")
 
     all_profile_comments = parse_security_profile_comments(lines, 0, len(lines)-1)
     all_ext_resources = parse_external_resources(lines, 0, len(lines)-1)
@@ -5189,11 +5170,15 @@ def run_cli(config_file=None, base_dir=None):
     all_sched_grp = parse_schedule_group(lines, 0, len(lines)-1)
     all_vdom_interfaces = parse_system_interfaces(lines)
 
+    # 3. vDOM별 파싱 및 엑셀 개별 파일 생성 / 3. Parse per vDOM & Generate Individual Excel Files
     summary_list = []
     vdom_obj_counts = {}
 
-    for vdom_name, vs, ve in vdom_sections:
-        print(f"\n[*] Processing vDOM '{vdom_name}' ({vs+1}~{ve+1})...")
+    for idx, (vdom_name, vs, ve) in enumerate(vdom_sections, 1):
+        pct = 10 + int((idx / max(1, num_vdoms)) * 80)
+        if status_fn:
+            status_fn(f"⟳ Processing ({idx}/{num_vdoms}): {vdom_name}", pct)
+        log_fn(f"\n[{idx}/{num_vdoms}] Parsing vDOM '{vdom_name}' (lines {vs+1:,} ~ {ve+1:,})...")
 
         vdom_insp_mode = parse_vdom_inspection_mode(lines, vs, ve)
         vdom_ext_res = parse_external_resources(lines, vs, ve)
@@ -5265,20 +5250,24 @@ def run_cli(config_file=None, base_dir=None):
 
         clean_vdom_filename = re.sub(r'[\\/*?:"<>|]', "_", vdom_name) + ".xlsx"
         vdom_file_path = os.path.join(target_dir, clean_vdom_filename)
-        export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
-                                 resolver, obj_counts, vdom_file_path,
-                                 profile_comments=all_profile_comments,
-                                 vdom_inspection_mode=vdom_insp_mode,
-                                 ext_resources=merged_ext_res,
-                                 static_routes=static_routes,
-                                 policy_routes=policy_routes,
-                                 ospf_data=ospf_data,
-                                 vpn_data=vpn_data,
-                                 interfaces=vdom_interfaces,
-                                 acl_pols=acl_pols)
-        print(f"    -> [Saved] {clean_vdom_filename} (Policy:{counts[0]}, LocalIn:{counts[1]}, CNAT:{counts[2]}, VIP:{counts[3]}, DoS:{counts[4]}, ACL:{counts[5]}, StaticRt:{counts[6]}, PolicyRt:{counts[7]}, OSPF:{counts[8]}, IPsec:{counts[9]}, Intf:{counts[10]})")
+        actual_path = export_single_vdom_excel(vdom_name, fw_pols, li_pols, cn_ents, dn_ents, dos_pols,
+                                               resolver, obj_counts, vdom_file_path,
+                                               profile_comments=all_profile_comments,
+                                               vdom_inspection_mode=vdom_insp_mode,
+                                               ext_resources=merged_ext_res,
+                                               static_routes=static_routes,
+                                               policy_routes=policy_routes,
+                                               ospf_data=ospf_data,
+                                               vpn_data=vpn_data,
+                                               interfaces=vdom_interfaces,
+                                               acl_pols=acl_pols,
+                                               log_fn=log_fn)
+        saved_name = os.path.basename(actual_path)
+        log_fn(f"    -> [Saved] {saved_name} (Policy: {counts[0]}, LocalIn: {counts[1]}, CNAT: {counts[2]}, VIP: {counts[3]}, DoS: {counts[4]}, ACL: {counts[5]}, StaticRt: {counts[6]}, PolicyRt: {counts[7]}, OSPF: {counts[8]}, IPsec: {counts[9]}, Intf: {counts[10]})")
 
-    # 전체 vDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / Generate Total Summary Excel Across All vDOMs (_TOTAL_SUMMARY.xlsx)
+    # 4. 전체 vDOM 통합 요약 파일 생성 (_TOTAL_SUMMARY.xlsx) / 4. Generate Total Summary Excel
+    if status_fn:
+        status_fn("⟳ Building total summary workbook...", 95)
     total_summary_path = os.path.join(target_dir, "_TOTAL_SUMMARY.xlsx")
     wb_tot = Workbook()
     ws_tot = wb_tot.active
@@ -5313,39 +5302,95 @@ def run_cli(config_file=None, base_dir=None):
         sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
 
     auto_fit(ws_tot, min_w=12)
-    wb_tot.save(total_summary_path)
-    print(f"\n[OK] Total Summary Saved: {total_summary_path}")
+    saved_summary_path = safe_save_workbook(wb_tot, total_summary_path, log_fn=log_fn)
+    log_fn(f"\n[*] [SUMMARY COMPLETE] {saved_summary_path}")
 
-    print("\n" + "=" * 125)
-    print(f"  FortiGate [{hostname}] vDOM Export Summary")
-    print("=" * 125)
     fmt = "  {:<20} {:>7} {:>7} {:>6} {:>5} {:>4} {:>4} {:>8} {:>8} {:>5} {:>6} {:>6} | {:>5} {:>5} {:>5} {:>5} {:>5}"
-    print(fmt.format("vDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS", "ACL", "StaticRt", "PolicyRt", "OSPF", "IPsec", "Intf",
-                      "Addr", "AGrp", "Svc", "SGrp", "Pool"))
-    print("-" * 125)
+    hdr_str = fmt.format("vDOM", "Policy", "LocalIn", "C-NAT", "DNAT", "DoS", "ACL", "StaticRt", "PolicyRt", "OSPF", "IPsec", "Intf",
+                         "Addr", "AGrp", "Svc", "SGrp", "Pool")
+    sep_w = len(hdr_str)
+
+    log_fn("\n" + "=" * sep_w)
+    log_fn(f"  FortiGate [{hostname}] vDOM Export Summary")
+    log_fn("=" * sep_w)
+    log_fn(hdr_str)
+    log_fn("-" * sep_w)
     totals = [0] * 16
     for vdom, counts in summary_list:
         oc = vdom_obj_counts.get(vdom, [0]*5)
-        print(fmt.format(vdom, *counts, *oc[:5]))
+        log_fn(fmt.format(vdom, *counts, *oc[:5]))
         for i in range(11):
             totals[i] += counts[i]
         for i in range(5):
             totals[11 + i] += oc[i]
-    print("-" * 125)
-    print(fmt.format("Total", *totals))
-    print("=" * 125)
-    print(f"\n[Finished] All {len(vdom_sections)} vDOM Excel files created in directory: '{target_dir}'")
+    log_fn("-" * sep_w)
+    log_fn(fmt.format("Total", *totals))
+    log_fn("=" * sep_w)
+    log_fn(f"\n[Finished] All {len(vdom_sections)} vDOM Excel files created in directory: '{target_dir}'")
+    if status_fn:
+        status_fn("✔ All Excel workbooks generated successfully", 100)
+
+    return target_dir
+
+
+def run_gui(force_tk=False):
+    """
+    GUI 실행:
+      1. 기본적으로 최신 Glassmorphism 테마의 PyWebView GUI 실행 (첨부 이미지 스타일 1:1 완벽 구현)
+      2. pywebview 미설치 또는 force_tk=True인 경우 기존 Tkinter 모던 다크 테마 GUI로 안전하게 폴백
+    """
+    if not force_tk:
+        try:
+            import webview_ui
+            webview_ui.launch_gui(execute_conversion)
+            return
+        except Exception as e:
+            print(f"[*] Note: Modern PyWebView GUI not started ({e}). Falling back to Tkinter GUI...")
+
+    if not HAS_TKINTER:
+        print("[ERROR] Neither PyWebView nor Tkinter is available. GUI cannot start.")
+        print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
+        sys.exit(1)
+
+    # Windows 작업표시줄 독립 앱 ID 설정 / Set AppUserModelID for independent taskbar icon
+    if sys.platform == 'win32':
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'fortinet.fortigate.policytoexcel.exporter.1.0'
+            )
+        except Exception:
+            pass
+
+    root = tk.Tk()
+    app = FortiGateGUI(root)
+    root.mainloop()
+
+
+def run_cli(config_file=None, base_dir=None):
+    """커맨드라인(CLI) 모드 실행 / Launch Headless Command-Line Interface (CLI)"""
+    if config_file is None:
+        if len(sys.argv) < 2:
+            print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
+            sys.exit(1)
+        config_file = sys.argv[1]
+    if base_dir is None:
+        base_dir = sys.argv[2] if len(sys.argv) >= 3 else os.path.dirname(config_file) or '.'
+
+    execute_conversion(config_file, base_dir, log_fn=print)
 
 
 def main():
-    # 인자가 없거나 --gui 플래그인 경우 GUI 모드로 실행 / Run in GUI mode if no args or --gui flag is provided
+    # 인자가 없거나 --gui 플래그인 경우 최신 Glassmorphism GUI 모드로 실행
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
-        run_gui()
+        run_gui(force_tk=False)
+    elif len(sys.argv) >= 2 and sys.argv[1] in ('--tk', '--tkinter'):
+        run_gui(force_tk=True)
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
-        print("FortiGate Policy to Excel Exporter v1.5")
+        print("FortiGate Policy to Excel Exporter v2.1")
         print("Usage:")
-        print("  GUI Mode : python fortigate_policy_to_excel.py [--gui]")
-        print("  CLI Mode : python fortigate_policy_to_excel.py <config_file> [output_dir]")
+        print("  Modern GUI Mode  : python fortigate_policy_to_excel.py [--gui]")
+        print("  Classic GUI Mode : python fortigate_policy_to_excel.py --tk")
+        print("  CLI Mode         : python fortigate_policy_to_excel.py <config_file> [output_dir]")
         sys.exit(0)
     else:
         run_cli()
@@ -5353,3 +5398,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
