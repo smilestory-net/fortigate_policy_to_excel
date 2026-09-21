@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
-title FortiGate Policy to Excel Exporter v1.0
+title FortiGate Policy to Excel Exporter
 cd /d "%~dp0"
 
 echo ==============================================================================
@@ -59,11 +59,16 @@ if not defined PY_BIN goto :py_not_found
 
 echo [*] Python detected: %PY_BIN%
 
-REM 6. Check required dependency (openpyxl)
+REM 6. Check required dependencies (openpyxl, pywebview)
 "%PY_BIN%" -c "import openpyxl" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [*] Installing required module: openpyxl...
     "%PY_BIN%" -m pip install openpyxl
+)
+"%PY_BIN%" -c "import webview" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [*] Installing required module: pywebview...
+    "%PY_BIN%" -m pip install pywebview
 )
 
 REM 7. Run Application
