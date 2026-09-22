@@ -24,7 +24,7 @@ user32 = ctypes.windll.user32 if sys.platform == 'win32' else None
 kernel32 = ctypes.windll.kernel32 if sys.platform == 'win32' else None
 dwmapi = ctypes.windll.dwmapi if sys.platform == 'win32' else None
 
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 
 if sys.platform == 'win32':
