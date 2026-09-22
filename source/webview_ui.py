@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-FortiGate Policy Exporter - Modern Dark Cyber-Glassmorphism Webview UI
-=====================================================================
-High-fidelity dark cyber-glassmorphism GUI matching user requirements:
-- Authentic Fortinet Logo embedded from fortinet.ico
-- Windows 11 style titlebar with functional Minimize, Maximize/Restore, Close
-- Dragging restricted strictly to the top title bar
-- Identical equal-width buttons for Select File & Select Folder (125px)
-- Integrated cyber-blue progress bar (animated in real-time)
-- Clean OUTPUT console header (removed unused dummy tabs)
-- 8-directional smooth border resize handles without unwanted OS caption bar
-- Explicit Taskbar AppUserModelID and Fortinet icon binding
-- Powered by pywebview and Microsoft Edge WebView2.
-"""
 
 import sys
 import os
@@ -37,6 +23,9 @@ except ImportError:
 user32 = ctypes.windll.user32 if sys.platform == 'win32' else None
 kernel32 = ctypes.windll.kernel32 if sys.platform == 'win32' else None
 dwmapi = ctypes.windll.dwmapi if sys.platform == 'win32' else None
+
+APP_VERSION = "2.3"
+
 
 if sys.platform == 'win32':
     kernel32.VirtualAlloc.restype = ctypes.c_void_p
@@ -378,7 +367,7 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FortiGate Policy Exporter v2.1</title>
+<title>FortiGate Policy Exporter v__APP_VERSION__</title>
 <style>
   :root {
     --win-accent: __WIN_ACCENT_COLOR__;
@@ -621,6 +610,8 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     --term-scroll-track: #080a0f;
     --term-scroll-thumb: #1e293b;
     --term-cursor: #94a3b8;
+    --term-selection-bg: #264f78;
+    --term-selection-fg: #ffffff;
     --status-bar-text: #94a3b8;
     --status-dot-ready: #3b82f6;
     --status-dot-running: #f59e0b;
@@ -711,6 +702,8 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     --term-scroll-track: #f8fafc;
     --term-scroll-thumb: #cbd5e1;
     --term-cursor: #0284c7;
+    --term-selection-bg: #b4d7ff;
+    --term-selection-fg: #0f172a;
     --status-bar-text: #64748b;
     --status-dot-ready: #0284c7;
     --status-dot-running: #f59e0b;
@@ -1419,11 +1412,26 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     font-size: 12.5px;
     line-height: 1.6;
     color: var(--term-body-text);
-    user-select: text;
-    -webkit-user-select: text;
+    user-select: text !important;
+    -webkit-user-select: text !important;
     white-space: pre-wrap;
     word-break: break-all;
     transition: color 0.25s ease;
+    cursor: text;
+    outline: none;
+  }
+
+  .terminal-body *,
+  .terminal-body span {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    cursor: text;
+  }
+
+  .terminal-body ::selection,
+  .terminal-body *::selection {
+    background: var(--term-selection-bg, #264f78);
+    color: var(--term-selection-fg, #ffffff);
   }
 
   .terminal-body::-webkit-scrollbar {
@@ -1538,6 +1546,9 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     vertical-align: middle;
     margin-left: 4px;
     animation: blink 1s step-end infinite;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    pointer-events: none;
   }
 
   @keyframes blink {
@@ -1654,7 +1665,7 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
       <!-- Brand Title -->
       <div class="brand-title-wrap">
         <span class="brand-title">FORTIGATE POLICY EXPORTER</span>
-        <span class="brand-version">v2.1</span>
+        <span class="brand-version">v__APP_VERSION__</span>
       </div>
     </div>
 
@@ -1802,7 +1813,7 @@ HTML_TEMPLATE_RAW = r"""<!DOCTYPE html>
     </div>
 
     <!-- Terminal Text Area -->
-    <div id="terminalBody" class="terminal-body">Fortigate Config -> Excel Converter initialized.
+    <div id="terminalBody" class="terminal-body" tabindex="0">Fortigate Config -> Excel Converter initialized.
 Select a .conf file and click 'Start Conversion' to begin.
 
 Fortigate Config -> <span class="cursor-block"></span></div>
@@ -1940,6 +1951,19 @@ Fortigate Config -> <span class="cursor-block"></span></div>
 
   window.addEventListener('DOMContentLoaded', () => {
     initTheme();
+    const term = document.getElementById('terminalBody');
+    if (term) {
+      term.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+          e.preventDefault();
+          const range = document.createRange();
+          range.selectNodeContents(term);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      });
+    }
     setTimeout(async () => {
       if (window.pywebview && window.pywebview.api) {
         try {
@@ -2429,6 +2453,7 @@ def get_html_template(theme_id=None, auto_open=None):
 
     html = HTML_TEMPLATE_RAW.replace("__FORTINET_LOGO_B64__", FORTINET_LOGO_B64)
     html = html.replace("__WIN_ACCENT_COLOR__", get_system_accent_color())
+    html = html.replace("__APP_VERSION__", APP_VERSION)
     html = html.replace("__INITIAL_THEME__", theme_id)
     html = html.replace("__INITIAL_THEME_LABEL__", theme_label)
     html = html.replace("__INITIAL_AUTO_OPEN_CHECKED__", "checked" if auto_open else "")
@@ -2800,7 +2825,7 @@ def launch_gui(converter_callback):
     if sys.platform == 'win32':
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                'fortinet.fortigate.policytoexcel.exporter.2.1'
+                f'fortinet.fortigate.policytoexcel.exporter.{APP_VERSION}'
             )
         except Exception:
             pass
@@ -2833,7 +2858,7 @@ def launch_gui(converter_callback):
             pass
 
     window_kwargs = dict(
-        title="FORTIGATE POLICY EXPORTER v2.1",
+        title=f"FORTIGATE POLICY EXPORTER v{APP_VERSION}",
         html=html_content,
         js_api=api,
         width=1040,
