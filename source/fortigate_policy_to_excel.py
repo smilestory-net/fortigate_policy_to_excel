@@ -18,7 +18,7 @@ import tempfile
 from collections import OrderedDict
 from datetime import datetime
 
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 
 # Windows 고해상도(High-DPI) 화면에서 흐림 방지 및 선명한 ClearType 렌더링 활성화 / Enable Windows High-DPI (Per-Monitor v2) & ClearType rendering
@@ -1917,10 +1917,12 @@ HDR_DEFAULT_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_ty
 HDR_SRC_FILL     = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # 진한 파랑 (출발지) / Deep Blue (Source)
 HDR_DST_FILL     = PatternFill(start_color="843C39", end_color="843C39", fill_type="solid") # 진한 빨강 (목적지) / Deep Red (Destination)
 HDR_SVC_FILL     = PatternFill(start_color="415A77", end_color="415A77", fill_type="solid") # 블루그레이 (서비스) / Blue-Gray (Service)
+EXCEL_FONT_FAMILY = "Malgun Gothic"
+
 HDR_SCHED_FILL   = PatternFill(start_color="2A5C5A", end_color="2A5C5A", fill_type="solid") # 딥 틸 (스케줄) / Deep Teal (Schedule)
 HDR_P1_FILL      = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # 딥 네이비 블루 (IPsec Phase 1) / Deep Navy Blue
 HDR_P2_FILL      = PatternFill(start_color="2A5C5A", end_color="2A5C5A", fill_type="solid") # 딥 틸 (IPsec Phase 2) / Deep Teal
-HDR_FONT         = Font(name="맑은 고딕", size=10, bold=True, color="FFFFFF")
+HDR_FONT         = Font(name=EXCEL_FONT_FAMILY, size=10, bold=True, color="FFFFFF")
 
 # --- 데이터 행 배경색 (행 전체 열에 일괄 적용) / Data Row Fills (Zebra Striping across all columns) ---
 ODD_ROW_FILL     = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid") # 홀수 행 (흰색) / Odd rows (White)
@@ -1928,30 +1930,30 @@ EVEN_ROW_FILL    = PatternFill(start_color="F2F4F8", end_color="F2F4F8", fill_ty
 DIS_ROW_FILL     = PatternFill(start_color="D5D8DC", end_color="D5D8DC", fill_type="solid") # 비활성화 행 (진한 회색) / Disabled rows (Dark Gray)
 
 # --- 데이터 폰트 색상 / Data Font Colors ---
-FONT_DEFAULT      = Font(name="맑은 고딕", size=9, color="000000")
-FONT_DEFAULT_BOLD = Font(name="맑은 고딕", size=9, bold=True, color="000000")
+FONT_DEFAULT      = Font(name=EXCEL_FONT_FAMILY, size=9, color="000000")
+FONT_DEFAULT_BOLD = Font(name=EXCEL_FONT_FAMILY, size=9, bold=True, color="000000")
 
 # 출발지 열 폰트 (파란 계열) / Source Column Font (Blue Palette)
-FONT_SRC          = Font(name="맑은 고딕", size=9, color="003366")
-FONT_SRC_GRP      = Font(name="맑은 고딕", size=9, bold=True, color="002060")
+FONT_SRC          = Font(name=EXCEL_FONT_FAMILY, size=9, color="003366")
+FONT_SRC_GRP      = Font(name=EXCEL_FONT_FAMILY, size=9, bold=True, color="002060")
 
 # 목적지 열 폰트 (빨간 계열) / Destination Column Font (Red Palette)
-FONT_DST          = Font(name="맑은 고딕", size=9, color="800000")
-FONT_DST_GRP      = Font(name="맑은 고딕", size=9, bold=True, color="9C0006")
+FONT_DST          = Font(name=EXCEL_FONT_FAMILY, size=9, color="800000")
+FONT_DST_GRP      = Font(name=EXCEL_FONT_FAMILY, size=9, bold=True, color="9C0006")
 
 # 스케줄 열 폰트 (틸 계열) / Schedule Column Font (Teal Palette)
-FONT_SCHED        = Font(name="맑은 고딕", size=9, color="1B4D4B")
-FONT_SCHED_GRP    = Font(name="맑은 고딕", size=9, bold=True, color="113634")
+FONT_SCHED        = Font(name=EXCEL_FONT_FAMILY, size=9, color="1B4D4B")
+FONT_SCHED_GRP    = Font(name=EXCEL_FONT_FAMILY, size=9, bold=True, color="113634")
 
 # 비활성화 행 폰트 / Disabled Row Font Colors
-FONT_DIS          = Font(name="맑은 고딕", size=9, color="495057")
-FONT_DIS_SRC      = Font(name="맑은 고딕", size=9, color="1B365D")
-FONT_DIS_DST      = Font(name="맑은 고딕", size=9, color="6B1D1D")
-FONT_DIS_SCHED    = Font(name="맑은 고딕", size=9, color="3D5554")
+FONT_DIS          = Font(name=EXCEL_FONT_FAMILY, size=9, color="495057")
+FONT_DIS_SRC      = Font(name=EXCEL_FONT_FAMILY, size=9, color="1B365D")
+FONT_DIS_DST      = Font(name=EXCEL_FONT_FAMILY, size=9, color="6B1D1D")
+FONT_DIS_SCHED    = Font(name=EXCEL_FONT_FAMILY, size=9, color="3D5554")
 
 # Action 및 vDOM 폰트 / Action (Accept / Deny) & vDOM Fonts
-ACCEPT_FONT      = Font(name="맑은 고딕", size=9, color="008000", bold=True)
-DENY_FONT        = Font(name="맑은 고딕", size=9, color="C00000", bold=True)
+ACCEPT_FONT      = Font(name=EXCEL_FONT_FAMILY, size=9, color="008000", bold=True)
+DENY_FONT        = Font(name=EXCEL_FONT_FAMILY, size=9, color="C00000", bold=True)
 SUBHDR_FILL      = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
 
 THIN_BORDER = Border(
@@ -3294,7 +3296,7 @@ def write_ospf_sheet(ws, ospf_data, vdom_name=""):
         return ws
 
     SEC_TITLE_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    SEC_TITLE_FONT = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+    SEC_TITLE_FONT = Font(name=EXCEL_FONT_FAMILY, size=11, bold=True, color="FFFFFF")
 
     def write_sec_title(ws, r, title, end_col):
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=end_col)
@@ -5358,18 +5360,18 @@ def execute_conversion(config_file, base_dir=None, log_fn=print, status_fn=None)
         oc = vdom_obj_counts.get(vdom, [0, 0, 0, 0, 0, 0, 0, 0])
         vals = [vdom] + counts + oc
         for col, v in enumerate(vals, 1):
-            f = Font(name="맑은 고딕", size=10, bold=(col == 1))
+            f = Font(name=EXCEL_FONT_FAMILY, size=10, bold=(col == 1))
             sc(ws_tot, ri, col, v, font=f, fill=fill, align=CENTER)
 
     tr = len(summary_list) + 2
-    sc(ws_tot, tr, 1, "Total", font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
+    sc(ws_tot, tr, 1, "Total", font=Font(name=EXCEL_FONT_FAMILY, size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
     for col in range(2, len(tot_headers) + 1):
         total = sum(
             (summary_list[r][1][col - 2] if col <= 12 else
              vdom_obj_counts.get(summary_list[r][0], [0]*8)[col - 13])
             for r in range(len(summary_list))
         )
-        sc(ws_tot, tr, col, total, font=Font(name="맑은 고딕", size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
+        sc(ws_tot, tr, col, total, font=Font(name=EXCEL_FONT_FAMILY, size=10, bold=True), fill=SUBHDR_FILL, align=CENTER)
 
     auto_fit(ws_tot, min_w=12)
     saved_summary_path = safe_save_workbook(wb_tot, total_summary_path, log_fn=log_fn)
