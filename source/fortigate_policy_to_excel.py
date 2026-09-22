@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FortiGate Configuration -> Excel Exporter & GUI (Unified Single-File Edition)
-=============================================================================
-FortiGate 방화벽 설정 파일(.conf)을 분석하여:
-  1. 호스트네임 디렉토리 생성 및 각 vDOM별 엑셀 파일(<vdom_name>.xlsx) 분할 생성
-  2. 전체 vDOM 총괄 요약 파일(_TOTAL_SUMMARY.xlsx) 동시 생성
-  3. 10대 핵심 정책, 라우팅(Static/Policy/OSPF) 및 IPsec VPN 개별 시트 완벽 분리 수록
-  4. 객체/그룹의 실제 IP, 서브넷, 포트, 코멘트를 다중 행 전개 및 스마트 셀 세로 병합(Merge)
-  5. Svc Protocol 컬럼 삭제, Svc Port 'ALL' 표기, Src/Dst/Svc Comment 분리 수록
-  6. 출발지(파랑), 목적지(빨강) 가독성 컬러 스타일링 및 비활성화 정책(진한 회색) 음영 처리
-  7. 모던 다크 테마 GUI 및 커맨드라인(CLI) 모드 완벽 통합 지원
-
-
-Parses FortiGate firewall backup configuration files (.conf / .txt) to:
-  1. Create a hostname-based directory with partitioned Excel files per vDOM (<vdom_name>.xlsx)
-  2. Simultaneously generate a master summary workbook (_TOTAL_SUMMARY.xlsx) across all vDOMs
-  3. Fully extract 10 core policies, routing (Static/Policy/OSPF), and IPsec VPN into dedicated sheets
-  4. Recursively resolve objects/groups to actual IPs/ports/comments with multi-row flattening & cell merging
-  5. Optimize service ports ('ALL') and provide dedicated Src/Dst/Svc Comment columns
-  6. Apply professional visual styling (Src blue, Dst red, zebra striping, disabled policy shading)
-  7. Provide an integrated modern Dark Theme GUI and headless CLI execution in a single file
-
 Usage / 사용법:
   - GUI Mode: python fortigate_policy_to_excel.py (Run without args or double-click / 인자 없이 실행)
   - CLI Mode: python fortigate_policy_to_excel.py <config_file> [output_dir]
@@ -38,6 +17,9 @@ import base64
 import tempfile
 from collections import OrderedDict
 from datetime import datetime
+
+APP_VERSION = "2.3"
+
 
 # Windows 고해상도(High-DPI) 화면에서 흐림 방지 및 선명한 ClearType 렌더링 활성화 / Enable Windows High-DPI (Per-Monitor v2) & ClearType rendering
 if sys.platform == 'win32':
@@ -117,7 +99,10 @@ def parse_edit_id(line):
 
 
 def mask_to_prefix(mask_str):
-    """255.255.255.0 -> 24 (서브넷 마스크를 CIDR Prefix 숫자로 변환 / Convert subnet mask to CIDR prefix)"""
+    """
+    255.255.255.0 -> 24 (서브넷 마스크를 CIDR Prefix 숫자로 변환
+    Convert subnet mask to CIDR prefix)
+    """
     try:
         parts = mask_str.split('.')
         bits = ''.join(format(int(p), '08b') for p in parts)
@@ -179,7 +164,10 @@ def format_ip_str(obj):
 
 
 def parse_hostname(lines, default_name="FortiGate"):
-    """config 파일에서 방화벽 hostname 추출 / Extract firewall hostname from config file"""
+    """
+    config 파일에서 방화벽 hostname 추출
+    Extract firewall hostname from config file
+    """
     for line in lines[:300]:
         s = line.strip()
         if s.startswith("set hostname "):
@@ -266,7 +254,9 @@ BUILTIN_SCHEDULES_RECURRING = {
 
 
 def parse_address_objects(lines, vdom_start, vdom_end):
-    """config firewall address -> dict[name] = {type, ip, prefix, comment, ...}"""
+    """
+    config firewall address -> dict[name] = {type, ip, prefix, comment, ...}
+    """
     addrs = {}
     for k, v in BUILTIN_ADDRESSES.items():
         o = dict(v)
@@ -381,7 +371,9 @@ def parse_address_objects(lines, vdom_start, vdom_end):
 
 
 def parse_addrgrp_objects(lines, vdom_start, vdom_end):
-    """config firewall addrgrp -> dict[name] = {'members': [...], 'comment': '...'}"""
+    """
+    config firewall addrgrp -> dict[name] = {'members': [...], 'comment': '...'}
+    """
     groups = {}
     for sec_name in ("firewall addrgrp", "firewall addrgrp6"):
         ranges = find_section_range(lines, vdom_start, vdom_end, sec_name)
@@ -410,7 +402,9 @@ def parse_addrgrp_objects(lines, vdom_start, vdom_end):
 
 
 def parse_service_objects(lines, vdom_start, vdom_end):
-    """config firewall service custom -> dict[name] = {protocol, tcp_port, comment, ...}"""
+    """
+    config firewall service custom -> dict[name] = {protocol, tcp_port, comment, ...}
+    """
     svcs = {}
     for k, v in BUILTIN_SERVICES.items():
         o = dict(v)
@@ -479,7 +473,9 @@ def parse_service_objects(lines, vdom_start, vdom_end):
 
 
 def parse_service_groups(lines, vdom_start, vdom_end):
-    """config firewall service group -> dict[name] = {'members': [...], 'comment': '...'}"""
+    """
+    config firewall service group -> dict[name] = {'members': [...], 'comment': '...'}
+    """
     groups = {}
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall service group")
     for sr, er in ranges:
@@ -507,7 +503,9 @@ def parse_service_groups(lines, vdom_start, vdom_end):
 
 
 def parse_ippool_objects(lines, vdom_start, vdom_end):
-    """config firewall ippool -> dict[name] = {startip, endip, type, display}"""
+    """
+    config firewall ippool -> dict[name] = {startip, endip, type, display}
+    """
     pools = {}
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall ippool")
     for sr, er in ranges:
@@ -610,7 +608,9 @@ def format_schedule_time(obj):
 
 
 def parse_schedule_recurring(lines, vdom_start, vdom_end):
-    """config firewall schedule recurring -> dict[name] = {'type': 'recurring', 'day': [...], 'start': '...', 'end': '...', 'comment': '...'}"""
+    """
+    config firewall schedule recurring -> dict[name] = {'type': 'recurring', 'day': [...], 'start': '...', 'end': '...', 'comment': '...'}
+    """
     scheds = {}
     for k, v in BUILTIN_SCHEDULES_RECURRING.items():
         o = dict(v)
@@ -647,7 +647,9 @@ def parse_schedule_recurring(lines, vdom_start, vdom_end):
 
 
 def parse_schedule_onetime(lines, vdom_start, vdom_end):
-    """config firewall schedule onetime -> dict[name] = {'type': 'onetime', 'start': '...', 'end': '...', 'comment': '...'}"""
+    """
+    config firewall schedule onetime -> dict[name] = {'type': 'onetime', 'start': '...', 'end': '...', 'comment': '...'}
+    """
     scheds = {}
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule onetime")
     for sr, er in ranges:
@@ -679,7 +681,9 @@ def parse_schedule_onetime(lines, vdom_start, vdom_end):
 
 
 def parse_schedule_group(lines, vdom_start, vdom_end):
-    """config firewall schedule group -> dict[name] = {'type': 'group', 'members': [...], 'comment': '...'}"""
+    """
+    config firewall schedule group -> dict[name] = {'type': 'group', 'members': [...], 'comment': '...'}
+    """
     groups = {}
     ranges = find_section_range(lines, vdom_start, vdom_end, "firewall schedule group")
     for sr, er in ranges:
@@ -708,6 +712,7 @@ def parse_schedule_group(lines, vdom_start, vdom_end):
 def parse_security_profile_comments(lines, start, end):
     """
     FortiGate 보안 프로파일들의 코멘트 수집
+    Collecting Comments on FortiGate Security Profiles
     """
     profile_comments = {}
     sec_names = [
@@ -745,7 +750,10 @@ def parse_security_profile_comments(lines, start, end):
 
 def parse_external_resources(lines, start, end):
     """
-    'config system external-resource' 파싱
+    'config system external-resource' 구문 분석
+    반환 값: {name: {‘name’: ..., ‘type’: ..., ‘comments’: ..., ‘resource’: ..., ‘refresh-rate’: ..., ‘source-ip’: ...}} 형식의 딕셔너리
+    
+    'config system external-resource' Parsing
     Returns: dict of {name: {'name': ..., 'type': ..., 'comments': ..., 'resource': ..., 'refresh-rate': ..., 'source-ip': ...}}
     """
     resources = OrderedDict()
@@ -784,6 +792,7 @@ def parse_external_resources(lines, start, end):
 def parse_vdom_inspection_mode(lines, start, end):
     """
     vDOM 설정의 inspection-mode (flow 또는 proxy) 파싱
+    Parsing the `inspection-mode` (`flow` or `proxy`) setting in vDOM
     """
     for sr, er in find_section_range(lines, start, end, "system settings"):
         for i in range(sr + 1, er + 1):
@@ -1270,6 +1279,9 @@ def parse_dos_policy(lines, sec_start, sec_end):
 def parse_firewall_acl(lines, sec_start, sec_end):
     """
     config firewall acl 파싱
+    ACL 정책 딕셔너리 목록을 반환합니다.
+    
+    config firewall acl Parsing
     Returns list of ACL policy dicts
     """
     policies = []
@@ -1305,7 +1317,10 @@ def parse_firewall_acl(lines, sec_start, sec_end):
 
 
 def parse_router_static(lines, vdom_start, vdom_end):
-    """config router static -> list of static route dicts"""
+    """
+    config router static -> 정적 경로 딕셔너리 목록
+    config router static -> list of static route dicts
+    """
     routes = []
     ranges = find_section_range(lines, vdom_start, vdom_end, "router static")
     for sr, er in ranges:
@@ -1383,7 +1398,10 @@ def parse_router_static(lines, vdom_start, vdom_end):
 
 
 def parse_router_policy(lines, vdom_start, vdom_end):
-    """config router policy -> list of policy route dicts"""
+    """
+    config router policy -> 정책 경로 딕셔너리 목록
+    config router policy -> list of policy route dicts
+    """
     policies = []
     ranges = find_section_range(lines, vdom_start, vdom_end, "router policy")
     for sr, er in ranges:
@@ -1444,7 +1462,10 @@ def parse_router_policy(lines, vdom_start, vdom_end):
 
 
 def parse_router_ospf(lines, vdom_start, vdom_end):
-    """config router ospf -> dict containing router-id, networks, interfaces, redistribute, areas"""
+    """
+    config router ospf -> 라우터 ID, 네트워크, 인터페이스, 재분배, 영역을 포함하는 딕셔너리
+    config router ospf -> dict containing router-id, networks, interfaces, redistribute, areas
+    """
     data = {
         'router-id': '',
         'networks': [],
@@ -1555,7 +1576,10 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
 
 def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
     """
-    config router route-map 및 config router access-list 파싱
+    config router route-map 및 config router access-list 구문 분석
+    (acls_dict, route_maps_dict)를 반환합니다.
+    
+    config router route-map 및 config router access-list Parsing
     Returns (acls_dict, route_maps_dict)
     """
     acls = {}
@@ -1653,7 +1677,10 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
 
 def parse_system_interfaces(lines):
     """
-    config system interface 파싱
+    시스템 인터페이스 구성 구문 분석
+    dict를 반환합니다: vdom_name -> 인터페이스 dict 목록
+    
+    config system interface Parsing
     Returns dict: vdom_name -> list of interface dicts
     """
     vdom_intfs = {}
@@ -1750,7 +1777,10 @@ def parse_system_interfaces(lines):
 
 def parse_ipsec_vpn(lines, vdom_start, vdom_end):
     """
-    config vpn ipsec phase1-interface & phase2-interface 파싱
+    config vpn ipsec phase1-interface 및 phase2-interface 구문 분석
+    각각 phase1 정보와 phase2 항목 목록을 포함하는 딕셔너리 목록을 반환합니다.
+    
+    config vpn ipsec phase1-interface & phase2-interface Parsing
     Returns list of dicts: each containing phase1 info + list of phase2 entries
     """
     p1_list = []
@@ -1975,7 +2005,10 @@ def get_cell_style(col_category, seq, is_disabled, is_group=False, is_action=Fal
 
 
 def sc(ws, r, c, val, font=FONT_DEFAULT, fill=None, align=WRAP):
-    """Set cell with styling (High-Performance Cached Style Engine)."""
+    """
+    스타일이 적용된 셀 설정 (고성능 캐시형 스타일 엔진).
+    Set cell with styling (High-Performance Cached Style Engine).
+    """    
     cell = ws.cell(row=r, column=c, value=val)
     key = (id(font), id(fill), id(align))
     if not hasattr(ws, '_sc_cache'):
@@ -2108,6 +2141,9 @@ def safe_save_workbook(wb, filepath, log_fn=None):
     """
     엑셀 파일 저장 시 Excel 프로그램 등에서 파일이 열려 있어 PermissionError(WinError 32 / [Errno 13])가
     발생하는 경우 사용자에게 명확하고 친절한 안내 메시지를 제공하고 대체 타임스탬프 파일명으로 안전하게 보존합니다.
+    
+    If a PermissionError (WinError 32 / [Errno 13]) occurs when saving an Excel file because the file is already open in Excel or another program,
+    the system displays a clear and user-friendly message to the user and safely saves the file with an alternative timestamp filename.
     """
     try:
         wb.save(filepath)
@@ -3766,9 +3802,9 @@ C_TEXT_MUTED = "#858585"      # 보조 텍스트 (중간 회색) / Muted Seconda
 C_ACCENT_BLUE = "#007acc"         # 액센트 블루 / Accent Blue
 C_ACCENT_BLUE_HOVER = "#1f8ad2"   # 액센트 블루 호버 / Accent Blue Hover
 C_BTN_PRIMARY = "#0e639c"         # 기본 버튼 (블루) / Primary Button
-C_BTN_PRIMARY_HOVER = "#1177bb"
+C_BTN_PRIMARY_HOVER = "#1177bb"   # 기본 버튼 호버 / Primary Button Hover
 C_BTN_SECONDARY = "#3a3d41"   # 보조 버튼 (다크 그레이) / Secondary Button
-C_BTN_SECONDARY_HOVER = "#45494e"
+C_BTN_SECONDARY_HOVER = "#45494e" # 보조 버튼 호버 / Secondary Button Hover
 C_BTN_DISABLED = "#2d2d2d"    # 비활성화 버튼 / Disabled Button
 C_BTN_DISABLED_FG = "#555555"
 C_TAG_vDOM = "#dcdcaa"        # vDOM 로그 태그 / vDOM Tag
@@ -3787,8 +3823,7 @@ C_STATUSBAR_FG = "#ffffff"    # 하단 상태표시줄 글자색 / Status Bar Te
 class RoundedButton(tk.Canvas):
     """
     모던 타원형(캡슐형) 버튼 위젯 / Modern Oval / Capsule (Pill) Button Widget
-    부드러운 곡면 타원형 디자인과 호버, 클릭 피드백을 지원합니다.
-    Provides smooth oval capsule aesthetics with responsive hover and click animations.
+    부드러운 곡면 타원형 디자인과 호버, 클릭 피드백을 지원합니다. / Provides smooth oval capsule aesthetics with responsive hover and click animations.
     """
     def __init__(self, parent, text, bg, hover_bg, cmd=None, fg='#ffffff', font=('Segoe UI', 10),
                  height=34, width=None, radius=None, border_color=None, border_width=1,
@@ -3985,8 +4020,7 @@ class RoundedButton(tk.Canvas):
 class RoundedEntry(tk.Frame):
     """
     모던 둥근 모서리(타원형) 텍스트 입력창 위젯 / Modern Rounded Capsule Text Entry Widget
-    버튼과 동일한 높이(일체감) 및 둥근 타원형 테두리를 제공합니다.
-    Maintains identical height and rounded capsule style with adjacent buttons for visual harmony.
+    버튼과 동일한 높이(일체감) 및 둥근 타원형 테두리를 제공합니다. / Maintains identical height and rounded capsule style with adjacent buttons for visual harmony.
     """
     def __init__(self, parent, font=('Consolas', 10), bg=C_INPUT_BG, fg=C_INPUT_FG,
                  border_color=C_BORDER_LIGHT, focus_border=C_ACCENT_BLUE, height=34, radius=None):
@@ -4080,8 +4114,7 @@ class RoundedEntry(tk.Frame):
 class RoundedBadge(tk.Canvas):
     """
     정적 타원형 정보 뱃지 위젯 / Static Rounded Capsule Badge Widget
-    마우스 클릭이나 호버 반응이 없는 순수 시각적 정보 뱃지입니다.
-    A static visual indicator badge with no click, hover, or button interactions.
+    마우스 클릭이나 호버 반응이 없는 순수 시각적 정보 뱃지입니다. / A static visual indicator badge with no click, hover, or button interactions.
     """
     def __init__(self, parent, text, bg, fg, font=('Segoe UI', 9), height=22):
         dummy = tk.Label(parent, text=text, font=font)
@@ -4104,7 +4137,7 @@ class RoundedBadge(tk.Canvas):
 class ModernCheckbox(tk.Frame):
     """
     모던 다크 테마 커스텀 체크박스 위젯 / Modern Dark Theme Custom Checkbox Widget
-    표준 Tkinter 체크박스보다 글자 크기에 맞춰 시각적으로 균형 잡힌 크기(18x18px)와 깔끔한 체크마크를 제공합니다.
+    표준 Tkinter 체크박스보다 글자 크기에 맞춰 시각적으로 균형 잡힌 크기(18x18px)와 깔끔한 체크마크를 제공합니다. / It offers a visually balanced size (18x18px) that matches the font size and a clean checkmark, compared to the standard Tkinter checkbox.
     """
     def __init__(self, parent, text, variable, bg=C_BG_SIDEBAR, fg=C_TEXT_MAIN,
                  box_size=18, font=('Segoe UI', 10), active_fg='#ffffff'):
@@ -4388,7 +4421,7 @@ def get_fortinet_icon_path():
 class FortiGateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FortiGate Policy to Excel Exporter  v1.5")
+        self.root.title(f"FortiGate Policy to Excel Exporter  v{APP_VERSION}")
         self.root.minsize(860, 480)
         self.root.configure(bg=C_BG_APP)
 
@@ -4464,6 +4497,11 @@ class FortiGateGUI:
         - Windows DWM 상에서 1x1 완전 투명 HICON 핸들을 ICON_SMALL에 적용 -> 창 제목줄 아이콘 완전 미표시
         - fortinet.ico가 존재할 경우 ICON_BIG 및 Window Class Icon에 적용 -> 작업표시줄에는 Fortinet 아이콘 표시
         - SetCurrentProcessExplicitAppUserModelID 설정으로 작업표시줄 앱 분리
+        
+        Completely hide the default icon (feather) on the left side of the window title bar and display “fortinet.ico” on the taskbar
+        - Apply a 1x1 fully transparent HICON handle to ICON_SMALL in Windows DWM -> Completely hide the window title bar icon
+        - If fortinet.ico exists, apply it to ICON_BIG and the Window Class Icon -> Display the Fortinet icon on the taskbar
+        - Separate the taskbar app using the SetCurrentProcessExplicitAppUserModelID setting
         """
         if sys.platform != 'win32':
             return
@@ -5368,8 +5406,11 @@ def execute_conversion(config_file, base_dir=None, log_fn=print, status_fn=None)
 def run_gui(force_tk=False):
     """
     GUI 실행:
-      1. 기본적으로 최신 Glassmorphism 테마의 PyWebView GUI 실행 (첨부 이미지 스타일 1:1 완벽 구현)
+      1. 기본적으로 최신 Antigravity 테마의 PyWebView GUI 실행 (첨부 이미지 스타일 1:1 완벽 구현)
       2. pywebview 미설치 또는 force_tk=True인 경우 기존 Tkinter 모던 다크 테마 GUI로 안전하게 폴백
+      
+      1. By default, launches the PyWebView GUI using the latest Antigravity theme (perfect 1:1 implementation of the style shown in the attached image)
+      2. If PyWebView is not installed or `force_tk=True`, safely falls back to the existing Tkinter Modern Dark theme GUI
     """
     if not force_tk:
         try:
@@ -5388,7 +5429,7 @@ def run_gui(force_tk=False):
     if sys.platform == 'win32':
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                'fortinet.fortigate.policytoexcel.exporter.1.0'
+                f'fortinet.fortigate.policytoexcel.exporter.{APP_VERSION}'
             )
         except Exception:
             pass
@@ -5402,6 +5443,7 @@ def run_cli(config_file=None, base_dir=None):
     """커맨드라인(CLI) 모드 실행 / Launch Headless Command-Line Interface (CLI)"""
     if config_file is None:
         if len(sys.argv) < 2:
+            print(f"FortiGate Policy to Excel Exporter v{APP_VERSION}")
             print("Usage: python fortigate_policy_to_excel.py <config_file> [output_dir]")
             sys.exit(1)
         config_file = sys.argv[1]
@@ -5412,13 +5454,13 @@ def run_cli(config_file=None, base_dir=None):
 
 
 def main():
-    # 인자가 없거나 --gui 플래그인 경우 최신 Glassmorphism GUI 모드로 실행
+    # 인자가 없거나 --gui 플래그인 경우 테가 적용된 GUI 모드로 실행 / If no arguments are provided or the --gui flag is used, run in GUI mode with Tega enabled
     if len(sys.argv) < 2 or (len(sys.argv) >= 2 and sys.argv[1] in ('--gui', '-g')):
         run_gui(force_tk=False)
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--tk', '--tkinter'):
         run_gui(force_tk=True)
     elif len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', '/?'):
-        print("FortiGate Policy to Excel Exporter v2.1")
+        print(f"FortiGate Policy to Excel Exporter v{APP_VERSION}")
         print("Usage:")
         print("  Modern GUI Mode  : python fortigate_policy_to_excel.py [--gui]")
         print("  Classic GUI Mode : python fortigate_policy_to_excel.py --tk")
