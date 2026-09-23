@@ -18,7 +18,7 @@ import tempfile
 from collections import OrderedDict
 from datetime import datetime
 
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 
 
 # Windows 고해상도(High-DPI) 화면에서 흐림 방지 및 선명한 ClearType 렌더링 활성화 / Enable Windows High-DPI (Per-Monitor v2) & ClearType rendering
@@ -37,6 +37,7 @@ if sys.platform == 'win32':
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, scrolledtext
+    import tkinter.font as tkfont
     HAS_TKINTER = True
 except ImportError:
     HAS_TKINTER = False
@@ -57,19 +58,45 @@ except ImportError:
 
 _QUOTED_RE = re.compile(r'"([^"]*)"')
 
+_SUBNET_MASK_MAP = {
+    '255.255.255.255': 32, '255.255.255.254': 31, '255.255.255.252': 30, '255.255.255.248': 29,
+    '255.255.255.240': 28, '255.255.255.224': 27, '255.255.255.192': 26, '255.255.255.128': 25,
+    '255.255.255.0': 24,   '255.255.254.0': 23,   '255.255.252.0': 22,   '255.255.248.0': 21,
+    '255.255.240.0': 20,   '255.255.224.0': 19,   '255.255.192.0': 18,   '255.255.128.0': 17,
+    '255.255.0.0': 16,     '255.254.0.0': 15,     '255.252.0.0': 14,     '255.248.0.0': 13,
+    '255.240.0.0': 12,     '255.224.0.0': 11,     '255.192.0.0': 10,     '255.128.0.0': 9,
+    '255.0.0.0': 8,         '254.0.0.0': 7,         '252.0.0.0': 6,         '248.0.0.0': 5,
+    '240.0.0.0': 4,         '224.0.0.0': 3,         '192.0.0.0': 2,         '128.0.0.0': 1,
+    '0.0.0.0': 0
+}
+
+
+def parse_quoted_from_rest(rest):
+    """'val1 "val2" ...' -> ["val1", "val2"] (고속 파싱 헬퍼 / Fast-path parser helper)"""
+    if not rest:
+        return []
+    if '"' not in rest:
+        return rest.split()
+    quoted = _QUOTED_RE.findall(rest)
+    return quoted if quoted else rest.split()
+
+
+def parse_set_val_from_rest(val):
+    """Strip surrounding quotes from a set value string (고속 따옴표 제거 헬퍼)"""
+    if not val:
+        return ""
+    val = val.strip()
+    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+        return val[1:-1]
+    return val
+
 
 def parse_quoted_values(line):
     """'set field "val1" "val2" ...' -> ["val1", "val2"]"""
     parts = line.strip().split(None, 2)
     if len(parts) < 3:
         return []
-    rest = parts[2]
-    if '"' not in rest:
-        return rest.split()
-    quoted = _QUOTED_RE.findall(rest)
-    if quoted:
-        return quoted
-    return rest.split()
+    return parse_quoted_from_rest(parts[2])
 
 
 def parse_set_value(line):
@@ -77,10 +104,7 @@ def parse_set_value(line):
     parts = line.strip().split(None, 2)
     if len(parts) < 3:
         return ""
-    val = parts[2].strip()
-    if val.startswith('"') and val.endswith('"'):
-        val = val[1:-1]
-    return val
+    return parse_set_val_from_rest(parts[2])
 
 
 def get_field_name(line):
@@ -91,10 +115,7 @@ def get_field_name(line):
 def parse_edit_id(line):
     parts = line.strip().split(None, 1)
     if len(parts) >= 2:
-        val = parts[1].strip()
-        if val.startswith('"') and val.endswith('"'):
-            val = val[1:-1]
-        return val
+        return parse_set_val_from_rest(parts[1])
     return ""
 
 
@@ -103,11 +124,13 @@ def mask_to_prefix(mask_str):
     255.255.255.0 -> 24 (서브넷 마스크를 CIDR Prefix 숫자로 변환
     Convert subnet mask to CIDR prefix)
     """
+    pref = _SUBNET_MASK_MAP.get(mask_str)
+    if pref is not None:
+        return pref
     try:
         parts = mask_str.split('.')
-        bits = ''.join(format(int(p), '08b') for p in parts)
-        return bits.count('1')
-    except:
+        return sum(bin(int(p)).count('1') for p in parts)
+    except Exception:
         return 32
 
 
@@ -267,8 +290,9 @@ def parse_address_objects(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'type': 'ipmask', 'ip': '', 'prefix': '', 'fqdn': '',
                        'start-ip': '', 'end-ip': '', 'country': '',
                        'wildcard-fqdn': '', 'display': '', 'comment': '',
@@ -282,36 +306,38 @@ def parse_address_objects(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'type':
-                            obj['type'] = v
-                            has_data = True
-                        elif f == 'subnet':
-                            parts = v.split()
-                            if len(parts) == 2:
-                                subnet_ip, subnet_mask = parts
-                            elif '/' in v:
-                                subnet_ip = v.split('/')[0]
-                                subnet_mask = v.split('/')[1]
-                            has_data = True
-                        elif f == 'fqdn':
-                            obj['fqdn'] = v
-                            has_data = True
-                        elif f == 'start-ip':
-                            obj['start-ip'] = v
-                            has_data = True
-                        elif f == 'end-ip':
-                            obj['end-ip'] = v
-                            has_data = True
-                        elif f == 'country':
-                            obj['country'] = v
-                            has_data = True
-                        elif f == 'wildcard-fqdn':
-                            obj['wildcard-fqdn'] = v
-                            has_data = True
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'type':
+                                obj['type'] = v
+                                has_data = True
+                            elif f == 'subnet':
+                                sub_parts = v.split()
+                                if len(sub_parts) == 2:
+                                    subnet_ip, subnet_mask = sub_parts
+                                elif '/' in v:
+                                    slash_parts = v.split('/')
+                                    subnet_ip, subnet_mask = slash_parts[0], slash_parts[1]
+                                has_data = True
+                            elif f == 'fqdn':
+                                obj['fqdn'] = v
+                                has_data = True
+                            elif f == 'start-ip':
+                                obj['start-ip'] = v
+                                has_data = True
+                            elif f == 'end-ip':
+                                obj['end-ip'] = v
+                                has_data = True
+                            elif f == 'country':
+                                obj['country'] = v
+                                has_data = True
+                            elif f == 'wildcard-fqdn':
+                                obj['wildcard-fqdn'] = v
+                                has_data = True
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
 
                 if name in BUILTIN_ADDRESSES and not has_data:
@@ -347,8 +373,9 @@ def parse_address_objects(lines, vdom_start, vdom_end):
     for sr, er in ranges6:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'type': 'ipv6', 'ip': '', 'prefix': '', 'display': '(IPv6)', 'comment': '', 'is_builtin': False}
                 i += 1
                 while i <= er:
@@ -356,13 +383,15 @@ def parse_address_objects(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'ip6':
-                            obj['ip'] = v
-                            obj['display'] = v
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'ip6':
+                                obj['ip'] = v
+                                obj['display'] = v
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
                 if name not in addrs and name not in BUILTIN_ADDRESSES:
                     addrs[name] = obj
@@ -380,8 +409,9 @@ def parse_addrgrp_objects(lines, vdom_start, vdom_end):
         for sr, er in ranges:
             i = sr + 1
             while i <= er:
-                if lines[i].strip().startswith("edit "):
-                    name = parse_edit_id(lines[i])
+                line_str = lines[i].strip()
+                if line_str.startswith("edit "):
+                    name = parse_edit_id(line_str)
                     members = []
                     comment = ""
                     i += 1
@@ -390,11 +420,14 @@ def parse_addrgrp_objects(lines, vdom_start, vdom_end):
                         if s in ("next", "end"):
                             break
                         if s.startswith("set "):
-                            f = get_field_name(lines[i])
-                            if f == "member":
-                                members = parse_quoted_values(lines[i])
-                            elif f in ("comment", "comments"):
-                                comment = parse_set_value(lines[i])
+                            parts = s.split(None, 2)
+                            if len(parts) >= 2:
+                                f = parts[1]
+                                rest = parts[2] if len(parts) >= 3 else ""
+                                if f == "member":
+                                    members = parse_quoted_from_rest(rest)
+                                elif f in ("comment", "comments"):
+                                    comment = parse_set_val_from_rest(rest)
                         i += 1
                     groups[name] = {'members': members, 'comment': comment}
                 i += 1
@@ -415,8 +448,9 @@ def parse_service_objects(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'protocol': 'TCP/UDP/SCTP', 'tcp_port': '', 'udp_port': '',
                        'sctp_port': '', 'icmptype': '', 'icmpcode': '',
                        'protocol_number': '', 'display': '', 'comment': '',
@@ -427,24 +461,26 @@ def parse_service_objects(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'protocol':
-                            obj['protocol'] = v
-                        elif f == 'tcp-portrange':
-                            obj['tcp_port'] = v
-                        elif f == 'udp-portrange':
-                            obj['udp_port'] = v
-                        elif f == 'sctp-portrange':
-                            obj['sctp_port'] = v
-                        elif f == 'icmptype':
-                            obj['icmptype'] = v
-                        elif f == 'icmpcode':
-                            obj['icmpcode'] = v
-                        elif f == 'protocol-number':
-                            obj['protocol_number'] = v
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'protocol':
+                                obj['protocol'] = v
+                            elif f == 'tcp-portrange':
+                                obj['tcp_port'] = v
+                            elif f == 'udp-portrange':
+                                obj['udp_port'] = v
+                            elif f == 'sctp-portrange':
+                                obj['sctp_port'] = v
+                            elif f == 'icmptype':
+                                obj['icmptype'] = v
+                            elif f == 'icmpcode':
+                                obj['icmpcode'] = v
+                            elif f == 'protocol-number':
+                                obj['protocol_number'] = v
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
 
                 parts = []
@@ -481,8 +517,9 @@ def parse_service_groups(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 members = []
                 comment = ""
                 i += 1
@@ -491,11 +528,14 @@ def parse_service_groups(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        if f == "member":
-                            members = parse_quoted_values(lines[i])
-                        elif f in ("comment", "comments"):
-                            comment = parse_set_value(lines[i])
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            if f == "member":
+                                members = parse_quoted_from_rest(rest)
+                            elif f in ("comment", "comments"):
+                                comment = parse_set_val_from_rest(rest)
                     i += 1
                 groups[name] = {'members': members, 'comment': comment}
             i += 1
@@ -511,8 +551,9 @@ def parse_ippool_objects(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'startip': '', 'endip': '', 'type': 'overload', 'display': '', 'comment': ''}
                 i += 1
                 while i <= er:
@@ -520,12 +561,14 @@ def parse_ippool_objects(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f in ('startip', 'endip', 'type'):
-                            obj[f] = v
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f in ('startip', 'endip', 'type'):
+                                obj[f] = v
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
                 if obj['startip'] == obj['endip']:
                     obj['display'] = f"{obj['startip']}/32" if obj['startip'] else ''
@@ -621,8 +664,9 @@ def parse_schedule_recurring(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'type': 'recurring', 'day': [], 'start': '', 'end': '', 'comment': '', 'is_builtin': False}
                 i += 1
                 while i <= er:
@@ -630,16 +674,18 @@ def parse_schedule_recurring(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'day':
-                            obj['day'] = v.split()
-                        elif f == 'start':
-                            obj['start'] = v
-                        elif f == 'end':
-                            obj['end'] = v
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'day':
+                                obj['day'] = v.split()
+                            elif f == 'start':
+                                obj['start'] = v
+                            elif f == 'end':
+                                obj['end'] = v
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
                 scheds[name] = obj
             i += 1
@@ -655,8 +701,9 @@ def parse_schedule_onetime(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'type': 'onetime', 'start': '', 'end': '', 'expiration-days': '', 'comment': ''}
                 i += 1
                 while i <= er:
@@ -664,16 +711,18 @@ def parse_schedule_onetime(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'start':
-                            obj['start'] = v
-                        elif f == 'end':
-                            obj['end'] = v
-                        elif f == 'expiration-days':
-                            obj['expiration-days'] = v
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'start':
+                                obj['start'] = v
+                            elif f == 'end':
+                                obj['end'] = v
+                            elif f == 'expiration-days':
+                                obj['expiration-days'] = v
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = v
                     i += 1
                 scheds[name] = obj
             i += 1
@@ -689,8 +738,9 @@ def parse_schedule_group(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 obj = {'type': 'group', 'members': [], 'comment': ''}
                 i += 1
                 while i <= er:
@@ -698,11 +748,14 @@ def parse_schedule_group(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        if f == 'member':
-                            obj['members'] = parse_quoted_values(lines[i])
-                        elif f in ('comment', 'comments'):
-                            obj['comment'] = parse_set_value(lines[i])
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            if f == 'member':
+                                obj['members'] = parse_quoted_from_rest(rest)
+                            elif f in ('comment', 'comments'):
+                                obj['comment'] = parse_set_val_from_rest(rest)
                     i += 1
                 groups[name] = obj
             i += 1
@@ -739,9 +792,11 @@ def parse_security_profile_comments(lines, start, end):
                     if s.startswith("edit "):
                         cur_prof = parse_edit_id(line)
                     elif s.startswith("set "):
-                        f = get_field_name(line)
-                        if f in ('comment', 'comments') and cur_prof:
-                            profile_comments[cur_prof] = parse_set_value(line)
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            if f in ('comment', 'comments') and cur_prof:
+                                profile_comments[cur_prof] = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
                     elif s == "next":
                         cur_prof = None
                 i += 1
@@ -763,7 +818,7 @@ def parse_external_resources(lines, start, end):
         while i <= er:
             s = lines[i].strip()
             if s.startswith("edit "):
-                name = parse_edit_id(lines[i])
+                name = parse_edit_id(s)
                 cur_obj = {
                     'name': name,
                     'status': 'enable',
@@ -775,12 +830,14 @@ def parse_external_resources(lines, start, end):
                     'category': ''
                 }
             elif s.startswith("set ") and cur_obj:
-                f = get_field_name(lines[i])
-                v = parse_set_value(lines[i])
-                if f in ('comment', 'comments'):
-                    cur_obj['comments'] = v
-                else:
-                    cur_obj[f] = v
+                parts = s.split(None, 2)
+                if len(parts) >= 2:
+                    f = parts[1]
+                    v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                    if f in ('comment', 'comments'):
+                        cur_obj['comments'] = v
+                    else:
+                        cur_obj[f] = v
             elif s in ("next", "end"):
                 if cur_obj:
                     resources[cur_obj['name']] = cur_obj
@@ -1019,9 +1076,10 @@ def parse_firewall_policy(lines, sec_start, sec_end):
     policies = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             p = {}
-            p['id'] = parse_edit_id(lines[i])
+            p['id'] = parse_edit_id(line_str)
             p['status'] = 'enable'
             p['name'] = ''
             p['action'] = 'deny'
@@ -1053,14 +1111,17 @@ def parse_firewall_policy(lines, sec_start, sec_end):
                 if s in ("next", "end"):
                     break
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f in ('srcaddr', 'dstaddr', 'service', 'srcintf', 'dstintf',
-                             'poolname', 'internet-service-name', 'internet-service-src-name'):
-                        p[f] = parse_quoted_values(lines[i])
-                    elif f == 'action':
-                        p['action'] = parse_set_value(lines[i])
-                    else:
-                        p[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f in ('srcaddr', 'dstaddr', 'service', 'srcintf', 'dstintf',
+                                 'poolname', 'internet-service-name', 'internet-service-src-name'):
+                            p[f] = parse_quoted_from_rest(rest)
+                        elif f == 'action':
+                            p['action'] = parse_set_val_from_rest(rest)
+                        else:
+                            p[f] = parse_set_val_from_rest(rest)
                 i += 1
             policies.append(p)
         i += 1
@@ -1071,9 +1132,10 @@ def parse_local_in_policy(lines, sec_start, sec_end):
     policies = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             p = {}
-            p['id'] = parse_edit_id(lines[i])
+            p['id'] = parse_edit_id(line_str)
             p['intf'] = ''
             p['srcaddr'] = []
             p['dstaddr'] = []
@@ -1088,13 +1150,16 @@ def parse_local_in_policy(lines, sec_start, sec_end):
                 if s in ("next", "end"):
                     break
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f in ('srcaddr', 'dstaddr', 'service'):
-                        p[f] = parse_quoted_values(lines[i])
-                    elif f == 'action':
-                        p['action'] = parse_set_value(lines[i])
-                    else:
-                        p[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f in ('srcaddr', 'dstaddr', 'service'):
+                            p[f] = parse_quoted_from_rest(rest)
+                        elif f == 'action':
+                            p['action'] = parse_set_val_from_rest(rest)
+                        else:
+                            p[f] = parse_set_val_from_rest(rest)
                 i += 1
             policies.append(p)
         i += 1
@@ -1105,9 +1170,10 @@ def parse_central_snat(lines, sec_start, sec_end):
     entries = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             e = {}
-            e['id'] = parse_edit_id(lines[i])
+            e['id'] = parse_edit_id(line_str)
             e['status'] = 'enable'
             e['srcintf'] = []
             e['dstintf'] = []
@@ -1122,11 +1188,14 @@ def parse_central_snat(lines, sec_start, sec_end):
                 if s in ("next", "end"):
                     break
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f in ('orig-addr', 'dst-addr', 'nat-ippool', 'srcintf', 'dstintf'):
-                        e[f] = parse_quoted_values(lines[i])
-                    else:
-                        e[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f in ('orig-addr', 'dst-addr', 'nat-ippool', 'srcintf', 'dstintf'):
+                            e[f] = parse_quoted_from_rest(rest)
+                        else:
+                            e[f] = parse_set_val_from_rest(rest)
                 i += 1
             entries.append(e)
         i += 1
@@ -1137,9 +1206,10 @@ def parse_vip(lines, sec_start, sec_end):
     entries = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             e = {}
-            e['name'] = parse_edit_id(lines[i])
+            e['name'] = parse_edit_id(line_str)
             e['uuid'] = ''
             e['comment'] = ''
             e['type'] = 'static-nat'
@@ -1173,10 +1243,12 @@ def parse_vip(lines, sec_start, sec_end):
                     if s.startswith("edit "):
                         if rs:
                             e['realservers'].append(rs)
-                        rs = {'id': parse_edit_id(lines[i]), 'ip': '', 'port': '', 'weight': '1'}
+                        rs = {'id': parse_edit_id(s), 'ip': '', 'port': '', 'weight': '1'}
                     elif s.startswith("set ") and rs:
-                        f = get_field_name(lines[i])
-                        rs[f] = parse_set_value(lines[i])
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rs[f] = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
                     elif s == "next":
                         if rs:
                             e['realservers'].append(rs)
@@ -1190,21 +1262,24 @@ def parse_vip(lines, sec_start, sec_end):
                     i += 1
                     continue
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f == 'mappedip':
-                        e['mappedip'] = '\n'.join(parse_quoted_values(lines[i]))
-                    elif f == 'monitor':
-                        e['monitor'] = '\n'.join(parse_quoted_values(lines[i]))
-                    elif f == 'service':
-                        e['service'] = parse_quoted_values(lines[i])
-                    elif f == 'arp-reply':
-                        val = parse_set_value(lines[i])
-                        e['arp-reply'] = val if val else 'enable'
-                    elif f == 'nat-source-vip':
-                        val = parse_set_value(lines[i])
-                        e['nat-source-vip'] = val if val else 'disable'
-                    else:
-                        e[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f == 'mappedip':
+                            e['mappedip'] = '\n'.join(parse_quoted_from_rest(rest))
+                        elif f == 'monitor':
+                            e['monitor'] = '\n'.join(parse_quoted_from_rest(rest))
+                        elif f == 'service':
+                            e['service'] = parse_quoted_from_rest(rest)
+                        elif f == 'arp-reply':
+                            val = parse_set_val_from_rest(rest)
+                            e['arp-reply'] = val if val else 'enable'
+                        elif f == 'nat-source-vip':
+                            val = parse_set_val_from_rest(rest)
+                            e['nat-source-vip'] = val if val else 'disable'
+                        else:
+                            e[f] = parse_set_val_from_rest(rest)
                 i += 1
             entries.append(e)
         i += 1
@@ -1215,9 +1290,10 @@ def parse_dos_policy(lines, sec_start, sec_end):
     policies = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             p = {}
-            p['id'] = parse_edit_id(lines[i])
+            p['id'] = parse_edit_id(line_str)
             p['interface'] = ''
             p['srcaddr'] = []
             p['dstaddr'] = []
@@ -1241,17 +1317,19 @@ def parse_dos_policy(lines, sec_start, sec_end):
                     if s.startswith("edit "):
                         if anomaly:
                             p['anomalies'].append(anomaly)
-                        anomaly = {'name': parse_edit_id(lines[i]),
+                        anomaly = {'name': parse_edit_id(s),
                                    'status': 'disable', 'log': 'disable',
                                    'action': 'disable', 'quarantine': 'disable',
                                    'threshold': ''}
                     elif s.startswith("set ") and anomaly:
-                        f_name = get_field_name(lines[i])
-                        f_val = parse_set_value(lines[i])
-                        if f_name == 'quarantine':
-                            anomaly['quarantine'] = 'attacker' if f_val.lower() == 'attacker' else 'disable'
-                        else:
-                            anomaly[f_name] = f_val
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f_name = parts[1]
+                            f_val = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f_name == 'quarantine':
+                                anomaly['quarantine'] = 'attacker' if f_val.lower() == 'attacker' else 'disable'
+                            else:
+                                anomaly[f_name] = f_val
                     elif s == "next":
                         if anomaly:
                             p['anomalies'].append(anomaly)
@@ -1265,11 +1343,14 @@ def parse_dos_policy(lines, sec_start, sec_end):
                     i += 1
                     continue
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f in ('srcaddr', 'dstaddr', 'service'):
-                        p[f] = parse_quoted_values(lines[i])
-                    else:
-                        p[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f in ('srcaddr', 'dstaddr', 'service'):
+                            p[f] = parse_quoted_from_rest(rest)
+                        else:
+                            p[f] = parse_set_val_from_rest(rest)
                 i += 1
             policies.append(p)
         i += 1
@@ -1287,9 +1368,10 @@ def parse_firewall_acl(lines, sec_start, sec_end):
     policies = []
     i = sec_start + 1
     while i <= sec_end:
-        if lines[i].strip().startswith("edit "):
+        line_str = lines[i].strip()
+        if line_str.startswith("edit "):
             p = {
-                'id': parse_edit_id(lines[i]),
+                'id': parse_edit_id(line_str),
                 'status': 'enable',
                 'interface': '',
                 'srcaddr': [],
@@ -1303,13 +1385,16 @@ def parse_firewall_acl(lines, sec_start, sec_end):
                 if s in ("next", "end"):
                     break
                 if s.startswith("set "):
-                    f = get_field_name(lines[i])
-                    if f in ('srcaddr', 'dstaddr', 'service'):
-                        p[f] = parse_quoted_values(lines[i])
-                    elif f in ('comments', 'comment'):
-                        p['comments'] = parse_set_value(lines[i])
-                    else:
-                        p[f] = parse_set_value(lines[i])
+                    parts = s.split(None, 2)
+                    if len(parts) >= 2:
+                        f = parts[1]
+                        rest = parts[2] if len(parts) >= 3 else ""
+                        if f in ('srcaddr', 'dstaddr', 'service'):
+                            p[f] = parse_quoted_from_rest(rest)
+                        elif f in ('comments', 'comment'):
+                            p['comments'] = parse_set_val_from_rest(rest)
+                        else:
+                            p[f] = parse_set_val_from_rest(rest)
                 i += 1
             policies.append(p)
         i += 1
@@ -1326,8 +1411,9 @@ def parse_router_static(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                route_id = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                route_id = parse_edit_id(line_str)
                 r = {
                     'id': route_id,
                     'status': 'enable',
@@ -1352,41 +1438,41 @@ def parse_router_static(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'dst':
-                            has_dst = True
-                            parts = v.split()
-                            if len(parts) == 2:
-                                ip, pf = format_subnet(parts[0], parts[1])
-                                r['dst'] = f"{ip}/{pf}" if pf else ip
-                            elif '/' in v:
-                                r['dst'] = v
-                            else:
-                                r['dst'] = v
-                            r['dst_raw'] = v
-                        elif f == 'gateway':
-                            r['gateway'] = v
-                        elif f == 'device':
-                            r['device'] = v
-                        elif f == 'distance':
-                            r['distance'] = v
-                            has_distance = True
-                        elif f == 'priority':
-                            r['priority'] = v
-                            has_priority = True
-                        elif f == 'status':
-                            r['status'] = v
-                        elif f in ('comment', 'comments'):
-                            r['comment'] = v
-                        elif f == 'blackhole':
-                            r['blackhole'] = v
-                        elif f == 'dynamic-gateway':
-                            r['dynamic-gateway'] = v
-                        elif f == 'link-monitor-exempt':
-                            r['link-monitor-exempt'] = v
-                        elif f == 'bfd':
-                            r['bfd'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            v = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
+                            if f == 'dst':
+                                has_dst = True
+                                sub_parts = v.split()
+                                if len(sub_parts) == 2:
+                                    ip, pf = format_subnet(sub_parts[0], sub_parts[1])
+                                    r['dst'] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    r['dst'] = v
+                                r['dst_raw'] = v
+                            elif f == 'gateway':
+                                r['gateway'] = v
+                            elif f == 'device':
+                                r['device'] = v
+                            elif f == 'distance':
+                                r['distance'] = v
+                                has_distance = True
+                            elif f == 'priority':
+                                r['priority'] = v
+                                has_priority = True
+                            elif f == 'status':
+                                r['status'] = v
+                            elif f in ('comment', 'comments'):
+                                r['comment'] = v
+                            elif f == 'blackhole':
+                                r['blackhole'] = v
+                            elif f == 'dynamic-gateway':
+                                r['dynamic-gateway'] = v
+                            elif f == 'link-monitor-exempt':
+                                r['link-monitor-exempt'] = v
+                            elif f == 'bfd':
+                                r['bfd'] = v
                     i += 1
                 if not has_distance:
                     r['distance'] = '10'
@@ -1407,8 +1493,9 @@ def parse_router_policy(lines, vdom_start, vdom_end):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                pol_id = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                pol_id = parse_edit_id(line_str)
                 p = {
                     'id': pol_id,
                     'status': 'enable',
@@ -1432,29 +1519,32 @@ def parse_router_policy(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        if f in ('input-device', 'output-device'):
-                            p[f] = parse_quoted_values(lines[i])
-                        elif f in ('srcaddr', 'dstaddr'):
-                            p[f] = parse_quoted_values(lines[i])
-                        else:
-                            v = parse_set_value(lines[i])
-                            if f == 'src':
-                                parts = v.split()
-                                if len(parts) == 2:
-                                    ip, pf = format_subnet(parts[0], parts[1])
-                                    p['src'] = f"{ip}/{pf}" if pf else ip
-                                else:
-                                    p['src'] = v
-                            elif f == 'dst':
-                                parts = v.split()
-                                if len(parts) == 2:
-                                    ip, pf = format_subnet(parts[0], parts[1])
-                                    p['dst'] = f"{ip}/{pf}" if pf else ip
-                                else:
-                                    p['dst'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            if f in ('input-device', 'output-device'):
+                                p[f] = parse_quoted_from_rest(rest)
+                            elif f in ('srcaddr', 'dstaddr'):
+                                p[f] = parse_quoted_from_rest(rest)
                             else:
-                                p[f] = v
+                                v = parse_set_val_from_rest(rest)
+                                if f == 'src':
+                                    sub_parts = v.split()
+                                    if len(sub_parts) == 2:
+                                        ip, pf = format_subnet(sub_parts[0], sub_parts[1])
+                                        p['src'] = f"{ip}/{pf}" if pf else ip
+                                    else:
+                                        p['src'] = v
+                                elif f == 'dst':
+                                    sub_parts = v.split()
+                                    if len(sub_parts) == 2:
+                                        ip, pf = format_subnet(sub_parts[0], sub_parts[1])
+                                        p['dst'] = f"{ip}/{pf}" if pf else ip
+                                    else:
+                                        p['dst'] = v
+                                else:
+                                    p[f] = v
                     i += 1
                 policies.append(p)
             i += 1
@@ -1482,7 +1572,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
         while i <= er:
             s = lines[i].strip()
             if s.startswith("set router-id "):
-                data['router-id'] = parse_set_value(lines[i])
+                data['router-id'] = parse_set_val_from_rest(s[14:])
             elif s == "config network":
                 i += 1
                 while i <= er:
@@ -1490,7 +1580,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                     if s2 == "end":
                         break
                     if s2.startswith("edit "):
-                        net_id = parse_edit_id(lines[i])
+                        net_id = parse_edit_id(s2)
                         net_entry = {'id': net_id, 'prefix': '', 'area': '0.0.0.0'}
                         i += 1
                         while i <= er:
@@ -1498,7 +1588,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                             if s3 in ("next", "end"):
                                 break
                             if s3.startswith("set prefix "):
-                                v = parse_set_value(lines[i])
+                                v = parse_set_val_from_rest(s3[11:])
                                 parts = v.split()
                                 if len(parts) == 2:
                                     ip, pf = format_subnet(parts[0], parts[1])
@@ -1506,7 +1596,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                                 else:
                                     net_entry['prefix'] = v
                             elif s3.startswith("set area "):
-                                net_entry['area'] = parse_set_value(lines[i])
+                                net_entry['area'] = parse_set_val_from_rest(s3[9:])
                             i += 1
                         data['networks'].append(net_entry)
                     i += 1
@@ -1517,7 +1607,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                     if s2 == "end":
                         break
                     if s2.startswith("edit "):
-                        intf_name = parse_edit_id(lines[i])
+                        intf_name = parse_edit_id(s2)
                         intf_entry = {
                             'name': intf_name, 'interface': '', 'cost': '',
                             'priority': '', 'dead-interval': '', 'hello-interval': '',
@@ -1529,8 +1619,10 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                             if s3 in ("next", "end"):
                                 break
                             if s3.startswith("set "):
-                                f = get_field_name(lines[i])
-                                intf_entry[f] = parse_set_value(lines[i])
+                                parts = s3.split(None, 2)
+                                if len(parts) >= 2:
+                                    f = parts[1]
+                                    intf_entry[f] = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
                             i += 1
                         data['interfaces'].append(intf_entry)
                     i += 1
@@ -1543,8 +1635,10 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                     if s2 == "end":
                         break
                     if s2.startswith("set "):
-                        f = get_field_name(lines[i])
-                        redist_entry[f] = parse_set_value(lines[i])
+                        parts = s2.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            redist_entry[f] = parse_set_val_from_rest(parts[2]) if len(parts) >= 3 else ""
                     i += 1
                 data['redistribute'].append(redist_entry)
             elif s == "config area":
@@ -1554,7 +1648,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                     if s2 == "end":
                         break
                     if s2.startswith("edit "):
-                        area_id = parse_edit_id(lines[i])
+                        area_id = parse_edit_id(s2)
                         area_entry = {'id': area_id, 'type': 'regular'}
                         i += 1
                         while i <= er:
@@ -1562,7 +1656,7 @@ def parse_router_ospf(lines, vdom_start, vdom_end):
                             if s3 in ("next", "end"):
                                 break
                             if s3.startswith("set type "):
-                                area_entry['type'] = parse_set_value(lines[i])
+                                area_entry['type'] = parse_set_val_from_rest(s3[9:])
                             i += 1
                         data['areas'].append(area_entry)
                     i += 1
@@ -1587,8 +1681,9 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
     for sr, er in acl_ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 acl = {'name': name, 'comments': '', 'rules': []}
                 i += 1
                 while i <= er:
@@ -1596,7 +1691,7 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set comments ") or s.startswith("set comment "):
-                        acl['comments'] = parse_set_value(lines[i])
+                        acl['comments'] = parse_set_val_from_rest(s.split(None, 2)[2] if len(s.split(None, 2)) >= 3 else "")
                     elif s == "config rule":
                         i += 1
                         while i <= er:
@@ -1604,7 +1699,7 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                             if s2 == "end":
                                 break
                             if s2.startswith("edit "):
-                                rid = parse_edit_id(lines[i])
+                                rid = parse_edit_id(s2)
                                 rule = {'id': rid, 'action': 'permit', 'prefix': '', 'exact_match': 'disable'}
                                 i += 1
                                 while i <= er:
@@ -1612,9 +1707,9 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                                     if s3 in ("next", "end"):
                                         break
                                     if s3.startswith("set action "):
-                                        rule['action'] = parse_set_value(lines[i])
+                                        rule['action'] = parse_set_val_from_rest(s3[11:])
                                     elif s3.startswith("set prefix "):
-                                        v = parse_set_value(lines[i])
+                                        v = parse_set_val_from_rest(s3[11:])
                                         parts = v.split()
                                         if len(parts) == 2:
                                             ip, pf = format_subnet(parts[0], parts[1])
@@ -1622,7 +1717,7 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                                         else:
                                             rule['prefix'] = v
                                     elif s3.startswith("set exact-match "):
-                                        rule['exact_match'] = parse_set_value(lines[i])
+                                        rule['exact_match'] = parse_set_val_from_rest(s3[16:])
                                     i += 1
                                 acl['rules'].append(rule)
                             i += 1
@@ -1635,8 +1730,9 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
     for sr, er in rm_ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 rm = {'name': name, 'comments': '', 'rules': []}
                 i += 1
                 while i <= er:
@@ -1644,7 +1740,7 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set comments ") or s.startswith("set comment "):
-                        rm['comments'] = parse_set_value(lines[i])
+                        rm['comments'] = parse_set_val_from_rest(s.split(None, 2)[2] if len(s.split(None, 2)) >= 3 else "")
                     elif s == "config rule":
                         i += 1
                         while i <= er:
@@ -1652,7 +1748,7 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                             if s2 == "end":
                                 break
                             if s2.startswith("edit "):
-                                rid = parse_edit_id(lines[i])
+                                rid = parse_edit_id(s2)
                                 rrule = {'id': rid, 'action': 'permit', 'match_ip': '', 'set_actions': []}
                                 i += 1
                                 while i <= er:
@@ -1660,11 +1756,11 @@ def parse_router_route_map_and_acl(lines, vdom_start, vdom_end):
                                     if s3 in ("next", "end"):
                                         break
                                     if s3.startswith("set action "):
-                                        rrule['action'] = parse_set_value(lines[i])
+                                        rrule['action'] = parse_set_val_from_rest(s3[11:])
                                     elif s3.startswith("set match-ip-address "):
-                                        rrule['match_ip'] = parse_set_value(lines[i])
+                                        rrule['match_ip'] = parse_set_val_from_rest(s3[21:])
                                     elif s3.startswith("set "):
-                                        rrule['set_actions'].append(lines[i].strip())
+                                        rrule['set_actions'].append(s3)
                                     i += 1
                                 rm['rules'].append(rrule)
                             i += 1
@@ -1688,8 +1784,9 @@ def parse_system_interfaces(lines):
     for sr, er in ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                name = parse_edit_id(line_str)
                 intf = {
                     'name': name,
                     'vdom': 'root',
@@ -1729,7 +1826,7 @@ def parse_system_interfaces(lines):
                                     if s3 in ("next", "end"):
                                         break
                                     if s3.startswith("set ip "):
-                                        vip = parse_set_value(lines[i])
+                                        vip = parse_set_val_from_rest(s3[7:])
                                         parts = vip.split()
                                         if len(parts) == 2:
                                             sip, spf = format_subnet(parts[0], parts[1])
@@ -1740,34 +1837,33 @@ def parse_system_interfaces(lines):
                                     i += 1
                             i += 1
                     elif s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        v = parse_set_value(lines[i])
-                        if f == 'ip':
-                            parts = v.split()
-                            if len(parts) == 2:
-                                ip, pf = format_subnet(parts[0], parts[1])
-                                intf['ip'] = ip
-                                intf['prefix'] = pf
-                                intf['display'] = f"{ip}/{pf}" if pf else ip
-                            elif '/' in v:
-                                intf['display'] = v
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            v = parse_set_val_from_rest(rest)
+                            if f == 'ip':
+                                sub_parts = v.split()
+                                if len(sub_parts) == 2:
+                                    ip, pf = format_subnet(sub_parts[0], sub_parts[1])
+                                    intf['ip'] = ip
+                                    intf['prefix'] = pf
+                                    intf['display'] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    intf['display'] = v
+                            elif f == 'remote-ip':
+                                sub_parts = v.split()
+                                if len(sub_parts) == 2:
+                                    rip, rpf = format_subnet(sub_parts[0], sub_parts[1])
+                                    intf['remote-ip'] = f"{rip}/{rpf}" if rpf else rip
+                                else:
+                                    intf['remote-ip'] = v
+                            elif f == 'allowaccess':
+                                intf['allowaccess'] = ' '.join(parse_quoted_from_rest(rest)) or v
+                            elif f == 'member':
+                                intf['member'] = parse_quoted_from_rest(rest)
                             else:
-                                intf['display'] = v
-                        elif f == 'remote-ip':
-                            parts = v.split()
-                            if len(parts) == 2:
-                                rip, rpf = format_subnet(parts[0], parts[1])
-                                intf['remote-ip'] = f"{rip}/{rpf}" if rpf else rip
-                            elif '/' in v:
-                                intf['remote-ip'] = v
-                            else:
-                                intf['remote-ip'] = v
-                        elif f == 'allowaccess':
-                            intf['allowaccess'] = ' '.join(parse_quoted_values(lines[i])) or v
-                        elif f == 'member':
-                            intf['member'] = parse_quoted_values(lines[i])
-                        else:
-                            intf[f] = v
+                                intf[f] = v
                     i += 1
                 vdom = intf.get('vdom', 'root')
                 vdom_intfs.setdefault(vdom, []).append(intf)
@@ -1791,8 +1887,9 @@ def parse_ipsec_vpn(lines, vdom_start, vdom_end):
     for sr, er in p1_ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                p1_name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                p1_name = parse_edit_id(line_str)
                 p1 = {
                     'name': p1_name,
                     'type': 'static',
@@ -1825,11 +1922,14 @@ def parse_ipsec_vpn(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        if f == 'proposal':
-                            p1['proposal'] = ' '.join(parse_quoted_values(lines[i])) or parse_set_value(lines[i])
-                        else:
-                            p1[f] = parse_set_value(lines[i])
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            if f == 'proposal':
+                                p1['proposal'] = ' '.join(parse_quoted_from_rest(rest)) or parse_set_val_from_rest(rest)
+                            else:
+                                p1[f] = parse_set_val_from_rest(rest)
                     i += 1
                 p1_dict[p1_name] = p1
                 p1_list.append(p1)
@@ -1840,8 +1940,9 @@ def parse_ipsec_vpn(lines, vdom_start, vdom_end):
     for sr, er in p2_ranges:
         i = sr + 1
         while i <= er:
-            if lines[i].strip().startswith("edit "):
-                p2_name = parse_edit_id(lines[i])
+            line_str = lines[i].strip()
+            if line_str.startswith("edit "):
+                p2_name = parse_edit_id(line_str)
                 p2 = {
                     'name': p2_name,
                     'phase1name': '',
@@ -1865,22 +1966,25 @@ def parse_ipsec_vpn(lines, vdom_start, vdom_end):
                     if s in ("next", "end"):
                         break
                     if s.startswith("set "):
-                        f = get_field_name(lines[i])
-                        if f == 'dhgrp':
-                            p2['dhgrp'] = parse_set_value(lines[i])
-                            has_dhgrp = True
-                        elif f == 'proposal':
-                            p2['proposal'] = ' '.join(parse_quoted_values(lines[i])) or parse_set_value(lines[i])
-                        elif f in ('src-subnet', 'dst-subnet'):
-                            v = parse_set_value(lines[i])
-                            parts = v.split()
-                            if len(parts) == 2:
-                                ip, pf = format_subnet(parts[0], parts[1])
-                                p2[f] = f"{ip}/{pf}" if pf else ip
+                        parts = s.split(None, 2)
+                        if len(parts) >= 2:
+                            f = parts[1]
+                            rest = parts[2] if len(parts) >= 3 else ""
+                            if f == 'dhgrp':
+                                p2['dhgrp'] = parse_set_val_from_rest(rest)
+                                has_dhgrp = True
+                            elif f == 'proposal':
+                                p2['proposal'] = ' '.join(parse_quoted_from_rest(rest)) or parse_set_val_from_rest(rest)
+                            elif f in ('src-subnet', 'dst-subnet'):
+                                v = parse_set_val_from_rest(rest)
+                                sub_parts = v.split()
+                                if len(sub_parts) == 2:
+                                    ip, pf = format_subnet(sub_parts[0], sub_parts[1])
+                                    p2[f] = f"{ip}/{pf}" if pf else ip
+                                else:
+                                    p2[f] = v
                             else:
-                                p2[f] = v
-                        else:
-                            p2[f] = parse_set_value(lines[i])
+                                p2[f] = parse_set_val_from_rest(rest)
                     i += 1
                 p1_target = p2.get('phase1name', '')
                 if p1_target in p1_dict:
@@ -2087,20 +2191,18 @@ def merge_group_spans(ws, p_start, expanded_list, col, h_align='left'):
 
 
 def auto_fit(ws, min_w=6, max_w=45):
-    # 다중 열 병합 셀(섹션 타이틀 등)을 수집하여 단일 열 너비 과다 확장 방지
-    multi_col_merged = set()
-    for rng in ws.merged_cells.ranges:
-        if rng.min_col < rng.max_col:
-            for r in range(rng.min_row, rng.max_row + 1):
-                for c in range(rng.min_col, rng.max_col + 1):
-                    multi_col_merged.add((r, c))
+    # 다중 열 병합 셀(섹션 타이틀 등) 범위를 수집하여 단일 열 너비 과다 확장 방지
+    multi_col_ranges = [rng for rng in ws.merged_cells.ranges if rng.min_col < rng.max_col]
 
     for col_cells in ws.columns:
         mx = 0
-        cl = get_column_letter(col_cells[0].column)
         col_idx = col_cells[0].column
+        cl = get_column_letter(col_idx)
+        col_multi_ranges = [rng for rng in multi_col_ranges if rng.min_col <= col_idx <= rng.max_col]
+
         for cell in col_cells:
-            if (cell.row, col_idx) in multi_col_merged:
+            r = cell.row
+            if col_multi_ranges and any(rng.min_row <= r <= rng.max_row for rng in col_multi_ranges):
                 continue
             val = cell.value
             if val is not None:
@@ -3848,12 +3950,17 @@ class RoundedButton(tk.Canvas):
         self._is_pressed = False
         self._icon_type = icon_type
 
-        if width is None:
+        try:
+            f_obj = tkfont.Font(font=font)
+            self._text_w = f_obj.measure(text)
+        except Exception:
             dummy = tk.Label(parent, text=text, font=font)
-            text_w = dummy.winfo_reqwidth()
+            self._text_w = dummy.winfo_reqwidth()
             dummy.destroy()
+
+        if width is None:
             extra_icon = 28 if icon_type else 0
-            self._target_w = text_w + height + 16 + extra_icon
+            self._target_w = self._text_w + height + 16 + extra_icon
         else:
             self._target_w = width
 
@@ -3912,10 +4019,12 @@ class RoundedButton(tk.Canvas):
 
         if self._icon_type == 'xlsx':
             # 문서 (.xlsx) 벡터 아이콘 렌더링 / Draw Vector XLSX Document Icon
-            dummy = tk.Label(self, text=self._text, font=self._font)
-            tw = dummy.winfo_reqwidth()
-            dummy.destroy()
-
+            tw = getattr(self, '_text_w', None)
+            if tw is None:
+                try:
+                    tw = tkfont.Font(font=self._font).measure(self._text)
+                except Exception:
+                    tw = 60
             icon_w = 20
             gap = 10
             total_content_w = icon_w + gap + tw
@@ -4119,9 +4228,12 @@ class RoundedBadge(tk.Canvas):
     마우스 클릭이나 호버 반응이 없는 순수 시각적 정보 뱃지입니다. / A static visual indicator badge with no click, hover, or button interactions.
     """
     def __init__(self, parent, text, bg, fg, font=('Segoe UI', 9), height=22):
-        dummy = tk.Label(parent, text=text, font=font)
-        text_w = dummy.winfo_reqwidth()
-        dummy.destroy()
+        try:
+            text_w = tkfont.Font(font=font).measure(text)
+        except Exception:
+            dummy = tk.Label(parent, text=text, font=font)
+            text_w = dummy.winfo_reqwidth()
+            dummy.destroy()
         w = text_w + 18
 
         parent_bg = parent.cget('bg')
