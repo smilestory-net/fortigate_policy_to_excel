@@ -2,7 +2,7 @@
 
 포티게이트(FortiGate) 방화벽의 백업 설정 파일(`.conf`)을 분석하여, VDOM별 정책과 객체를 가독성 높은 엑셀(`.xlsx`) 문서로 자동 변환·분할 생성해 주는 도구입니다.
 
-<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/ec74f88a-d14b-4703-adb1-4929d2445a2f" />
+<img width="1282" height="853" alt="image" src="https://github.com/user-attachments/assets/ed2d42ea-10b6-4782-b95a-20ab597cb39d" />
 
 
 ---
