@@ -2,7 +2,7 @@
 
 A tool that parses FortiGate firewall backup configuration files (`.conf`) and automatically converts and splits policies and objects by VDOM into highly readable Excel (`.xlsx`) workbooks.
 
-<img width="802" height="607" alt="image" src="https://github.com/user-attachments/assets/ec74f88a-d14b-4703-adb1-4929d2445a2f" />
+<img width="1282" height="853" alt="image" src="https://github.com/user-attachments/assets/ed2d42ea-10b6-4782-b95a-20ab597cb39d" />
 
 
 ---
